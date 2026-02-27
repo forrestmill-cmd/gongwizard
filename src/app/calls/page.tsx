@@ -459,8 +459,8 @@ export default function CallsPage() {
   }, [calls, allTrackers]);
 
   const selectedCalls = useMemo(
-    () => filteredCalls.filter((c) => selectedIds.has(c.id)),
-    [filteredCalls, selectedIds]
+    () => calls.filter((c) => selectedIds.has(c.id)),
+    [calls, selectedIds]
   );
 
   async function loadCalls() {
