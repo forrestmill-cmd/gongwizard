@@ -511,6 +511,7 @@ export default function CallsPage() {
 
         const trackerNames: string[] = [];
         for (const t of call.trackers || []) {
+          if (t.count != null && t.count <= 0) continue;
           const name = t.name || t.trackerName || t.id;
           if (name) trackerNames.push(name);
         }
