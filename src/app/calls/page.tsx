@@ -154,6 +154,7 @@ interface CallForExport {
   speakers: Speaker[];
   brief: string;
   turns: FormattedTurn[];
+  interactionStats?: any;
 }
 
 function buildMarkdown(calls: CallForExport[], opts: ExportOptions): string {
@@ -187,6 +188,17 @@ function buildCallText(call: CallForExport, opts: ExportOptions): string {
 
   if (opts.includeAIBrief && call.brief) {
     out += `### Gong AI Brief\n${call.brief}\n\n`;
+  }
+
+  if (opts.includeInteractionStats && call.interactionStats) {
+    out += `### Interaction Stats\n`;
+    const stats = call.interactionStats;
+    if (stats.talkRatio != null) out += `- Talk Ratio: ${Math.round(stats.talkRatio * 100)}%\n`;
+    if (stats.interactivity != null) out += `- Interactivity: ${(stats.interactivity).toFixed(2)}\n`;
+    if (stats.longestMonologue != null) out += `- Longest Monologue: ${formatDuration(Math.round(stats.longestMonologue))}s\n`;
+    if (stats.patience != null) out += `- Patience: ${(stats.patience).toFixed(2)}\n`;
+    if (stats.questionRate != null) out += `- Question Rate: ${(stats.questionRate).toFixed(2)}\n`;
+    out += '\n';
   }
 
   out += `### Transcript\n`;
@@ -231,6 +243,17 @@ function buildXML(calls: CallForExport[], opts: ExportOptions): string {
 
     if (opts.includeAIBrief && call.brief) {
       out += `    <brief>${escapeXml(call.brief)}</brief>\n`;
+    }
+
+    if (opts.includeInteractionStats && call.interactionStats) {
+      const stats = call.interactionStats;
+      out += `    <interactionStats`;
+      if (stats.talkRatio != null) out += ` talkRatio="${Math.round(stats.talkRatio * 100)}"`;
+      if (stats.interactivity != null) out += ` interactivity="${stats.interactivity.toFixed(2)}"`;
+      if (stats.longestMonologue != null) out += ` longestMonologue="${Math.round(stats.longestMonologue)}"`;
+      if (stats.patience != null) out += ` patience="${stats.patience.toFixed(2)}"`;
+      if (stats.questionRate != null) out += ` questionRate="${stats.questionRate.toFixed(2)}"`;
+      out += `/>\n`;
     }
 
     out += `    <transcript>\n`;
@@ -378,6 +401,7 @@ export default function CallsPage() {
   const [searchText, setSearchText] = useState('');
   const [excludeInternal, setExcludeInternal] = useState(false);
   const [activeTrackers, setActiveTrackers] = useState<Set<string>>(new Set());
+  const [workspaceId, setWorkspaceId] = useState<string>('');
 
   const [exportFormat, setExportFormat] = useState<'markdown' | 'xml' | 'jsonl'>('markdown');
   const [exportOpts, setExportOpts] = useState<ExportOptions>({
@@ -455,9 +479,10 @@ export default function CallsPage() {
           'X-Gong-Auth': session.authHeader,
         },
         body: JSON.stringify({
-          fromDate,
-          toDate,
+          fromDate: `${fromDate}T00:00:00Z`,
+          toDate: `${toDate}T23:59:59Z`,
           baseUrl: session.baseUrl,
+          ...(workspaceId ? { workspaceId } : {}),
         }),
       });
 
@@ -486,7 +511,7 @@ export default function CallsPage() {
 
         const trackerNames: string[] = [];
         for (const t of call.trackers || []) {
-          const name = t.name || t.trackerId;
+          const name = t.name || t.trackerName || t.id;
           if (name) trackerNames.push(name);
         }
 
@@ -609,6 +634,7 @@ export default function CallsPage() {
         speakers: [...speakerMap.values()],
         brief: callMeta.brief || '',
         turns,
+        interactionStats: callMeta.interactionStats || undefined,
       };
     });
   }
@@ -712,6 +738,26 @@ export default function CallsPage() {
               className="h-8 w-36 text-sm"
             />
           </div>
+          {session.workspaces?.length > 1 && (
+            <div className="flex items-center gap-2">
+              <Label htmlFor="workspace" className="text-sm whitespace-nowrap text-muted-foreground">
+                Workspace
+              </Label>
+              <select
+                id="workspace"
+                value={workspaceId}
+                onChange={(e) => setWorkspaceId(e.target.value)}
+                className="h-8 rounded-md border bg-background px-2 text-sm"
+              >
+                <option value="">All workspaces</option>
+                {session.workspaces.map((ws: any) => (
+                  <option key={ws.id} value={ws.id}>
+                    {ws.name || ws.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <Button size="sm" onClick={loadCalls} disabled={loading}>
             {loading ? (
               <>

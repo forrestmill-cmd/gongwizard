@@ -15,6 +15,40 @@ function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// Extract values from Gong's nested context.objects.fields structure
+// Ported from Python v1 extract_field_values()
+function extractFieldValues(
+  context: any[] | undefined,
+  fieldName: string,
+  objectType?: string
+): string[] {
+  const values: string[] = [];
+  for (const ctx of context || []) {
+    for (const obj of ctx?.objects || []) {
+      if (objectType) {
+        const objType = (obj?.objectType || '').toLowerCase();
+        if (objType !== objectType.toLowerCase()) continue;
+      }
+      if (fieldName.toLowerCase() === 'objectid') {
+        const value = obj?.objectId;
+        if (value) values.push(String(value));
+      } else {
+        for (const field of obj?.fields || []) {
+          if (
+            typeof field === 'object' &&
+            field !== null &&
+            (field.name || '').toLowerCase() === fieldName.toLowerCase()
+          ) {
+            const value = field.value;
+            if (value) values.push(String(value));
+          }
+        }
+      }
+    }
+  }
+  return values;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const authHeader = request.headers.get('X-Gong-Auth');
@@ -168,7 +202,9 @@ export async function POST(request: NextRequest) {
       actionItems: (c.content?.actionItems || []).map((ai: any) => ai.snippet || ai),
       interactionStats: c.interaction || null,
       context: c.context || [],
-      accountName: '',  // Will be extracted client-side from context if needed
+      accountName: extractFieldValues(c.context, 'name', 'Account')[0] || '',
+      accountIndustry: extractFieldValues(c.context, 'industry', 'Account')[0] || '',
+      accountWebsite: extractFieldValues(c.context, 'website', 'Account')[0] || '',
     }));
     return NextResponse.json({ calls: normalized });
 
