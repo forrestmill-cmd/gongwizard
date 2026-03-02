@@ -45,9 +45,6 @@ import { useFilterState } from '@/hooks/useFilterState';
 
 // ─── Session helpers ────────────────────────────────────────────────────────
 
-function saveSession(data: any) {
-  sessionStorage.setItem('gongwizard_session', JSON.stringify(data));
-}
 function getSession(): any | null {
   const s = sessionStorage.getItem('gongwizard_session');
   return s ? JSON.parse(s) : null;

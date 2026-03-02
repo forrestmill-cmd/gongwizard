@@ -122,15 +122,3 @@ export async function* smartStream(prompt: string, options?: {
   }
 }
 
-// ─── Token counting helpers ─────────────────────────────────────────────────
-
-export function estimateInputTokens(text: string): number {
-  // ~4 chars per token for English text
-  return Math.ceil(text.length / 4);
-}
-
-export const TOKEN_BUDGET = 250_000; // Hard cap per session
-
-export function checkBudget(usedTokens: number, newTokens: number): boolean {
-  return usedTokens + newTokens <= TOKEN_BUDGET;
-}
