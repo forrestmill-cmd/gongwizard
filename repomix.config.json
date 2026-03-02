@@ -1,0 +1,58 @@
+{
+  "output": {
+    "filePath": "docs/generated/.repomix-output.md",
+    "style": "markdown",
+    "removeComments": false,
+    "removeEmptyLines": false,
+    "showLineNumbers": true,
+    "topFilesLength": 10
+  },
+  "include": [
+    "src/**/*.{ts,tsx,js,jsx}",
+    "app/**/*.{ts,tsx,js,jsx}",
+    "pages/**/*.{ts,tsx,js,jsx}",
+    "lib/**/*.{ts,tsx,js,jsx}",
+    "components/**/*.{ts,tsx,js,jsx}",
+    "hooks/**/*.{ts,tsx,js,jsx}",
+    "utils/**/*.{ts,tsx,js,jsx}",
+    "types/**/*.{ts,tsx}",
+    "middleware.{ts,js}",
+    "next.config.{js,mjs,ts}",
+    "tailwind.config.{js,ts}",
+    "tsconfig.json",
+    "package.json",
+    "supabase/migrations/**/*.sql",
+    "prisma/schema.prisma"
+  ],
+  "ignore": {
+    "useGitignore": true,
+    "useDefaultPatterns": true,
+    "customPatterns": [
+      "node_modules/",
+      ".next/",
+      "out/",
+      "dist/",
+      "build/",
+      "coverage/",
+      "*.test.*",
+      "*.spec.*",
+      "__tests__/",
+      "docs/generated/",
+      ".repomix-output.md",
+      "public/",
+      "*.svg",
+      "*.png",
+      "*.ico",
+      "*.jpg",
+      "*.jpeg",
+      "*.gif",
+      "*.woff*",
+      "*.ttf",
+      "*.eot",
+      "package-lock.json",
+      "yarn.lock",
+      "pnpm-lock.yaml",
+      "bun.lockb"
+    ]
+  }
+}
