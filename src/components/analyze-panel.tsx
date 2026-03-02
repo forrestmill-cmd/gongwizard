@@ -182,8 +182,8 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
 
       setScoredCalls(scored);
       setStage('scored');
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'An unknown error occurred');
       setStage('idle');
     }
   }, [question, selectedCalls]);
@@ -314,6 +314,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
           body: JSON.stringify({ question, callData: callDataStr }),
         });
         const runData = await runRes.json();
+        if (!runRes.ok) throw new Error(runData.error || `Analysis failed for call ${sc.callId}`);
 
         allCallFindings.push({
           callId: sc.callId,
@@ -335,6 +336,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
           body: JSON.stringify({ question, allFindings: allCallFindings }),
         });
         const synthData = await synthRes.json();
+        if (!synthRes.ok) throw new Error(synthData.error || 'Synthesis failed');
         setThemes(synthData.themes || []);
         setOverallSummary(synthData.overall_summary || '');
       }
@@ -342,8 +344,8 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
       setTokensUsed(totalTokens);
       setStage('results');
       setAnalysisProgress('');
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'An unknown error occurred');
       setStage('scored');
       setAnalysisProgress('');
     }
@@ -375,8 +377,8 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         supporting_quotes: data.supporting_quotes || [],
       }]);
       setFollowUpInput('');
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'An unknown error occurred');
     } finally {
       setFollowUpLoading(false);
     }

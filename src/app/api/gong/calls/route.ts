@@ -101,7 +101,7 @@ function buildDateChunks(fromDate: string, toDate: string): Array<{ from: string
 
     const next = new Date(actualEnd);
     next.setDate(next.getDate() + 1);
-    next.setHours(start.getHours(), start.getMinutes(), start.getSeconds(), start.getMilliseconds());
+    next.setHours(0, 0, 0, 0);
     current = next;
   }
 

@@ -39,7 +39,7 @@ export function makeGongFetch(baseUrl: string, authHeader: string) {
         });
 
         if (response.ok) {
-          return response.json();
+          return await response.json();
         }
 
         if (response.status === 401 || response.status === 403) {

@@ -31,7 +31,9 @@ export async function cheapComplete(prompt: string, options?: {
       ...(options?.jsonMode ? { responseMimeType: 'application/json' } : {}),
     },
   });
-  return response.text ?? '';
+  const text = response.text ?? '';
+  if (!text) throw new Error('AI model returned empty response');
+  return text;
 }
 
 export async function cheapCompleteJSON<T = any>(prompt: string, options?: {
@@ -39,6 +41,7 @@ export async function cheapCompleteJSON<T = any>(prompt: string, options?: {
   maxTokens?: number;
 }): Promise<T> {
   const text = await cheapComplete(prompt, { ...options, jsonMode: true });
+  if (!text) throw new Error('AI model returned empty response');
   return JSON.parse(text);
 }
 
@@ -76,7 +79,9 @@ export async function smartComplete(prompt: string, options?: {
     ...(options?.jsonMode ? { response_format: { type: 'json_object' } } : {}),
   });
 
-  return response.choices[0]?.message?.content ?? '';
+  const text = response.choices[0]?.message?.content ?? '';
+  if (!text) throw new Error('AI model returned empty response');
+  return text;
 }
 
 export async function smartCompleteJSON<T = any>(prompt: string, options?: {
@@ -85,6 +90,7 @@ export async function smartCompleteJSON<T = any>(prompt: string, options?: {
   systemPrompt?: string;
 }): Promise<T> {
   const text = await smartComplete(prompt, { ...options, jsonMode: true });
+  if (!text) throw new Error('AI model returned empty response');
   return JSON.parse(text);
 }
 

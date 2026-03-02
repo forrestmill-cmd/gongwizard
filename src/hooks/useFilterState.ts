@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 
 const STORAGE_KEY = 'gongwizard_filters';
 
@@ -58,9 +58,16 @@ export function useFilterState() {
   const [activeTrackers, setActiveTrackers] = useState<Set<string>>(new Set());
   const [activeTopics, setActiveTopics] = useState<Set<string>>(new Set());
 
+  // Ref always holds current filter values to avoid stale closures
+  const currentFilters = useRef({ excludeInternal, durationRange, talkRatioRange, minExternalSpeakers });
+  useEffect(() => {
+    currentFilters.current = { excludeInternal, durationRange, talkRatioRange, minExternalSpeakers };
+  }, [excludeInternal, durationRange, talkRatioRange, minExternalSpeakers]);
+
   // Wrapper to persist on change
   const updatePersisted = useCallback(
     (updates: Partial<PersistedFilters>) => {
+      const { excludeInternal, durationRange, talkRatioRange, minExternalSpeakers } = currentFilters.current;
       const current: PersistedFilters = {
         excludeInternal,
         durationMin: durationRange[0],
@@ -71,7 +78,7 @@ export function useFilterState() {
       };
       persistFilters({ ...current, ...updates });
     },
-    [excludeInternal, durationRange, talkRatioRange, minExternalSpeakers]
+    [] // stable reference — reads from ref
   );
 
   const setExcludeInternal = useCallback(
