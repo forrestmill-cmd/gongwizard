@@ -3,13 +3,14 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Slider } from '@/components/ui/slider';
 import {
   Loader2,
   Download,
@@ -21,6 +22,23 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { format, subDays } from 'date-fns';
+import { estimateTokens, contextLabel, contextColor } from '@/lib/token-utils';
+import { formatDuration, isInternalParty, truncateToFirstSentence } from '@/lib/format-utils';
+import {
+  matchesTextSearch,
+  matchesTrackers,
+  matchesTopics,
+  matchesDurationRange,
+  matchesTalkRatioRange,
+  matchesParticipantName,
+  matchesMinExternalSpeakers,
+  matchesAiContentSearch,
+  computeTrackerCounts,
+  computeTopicCounts,
+} from '@/lib/filters';
+import { type ExportOptions } from '@/lib/transcript-formatter';
+import { useCallExport } from '@/hooks/useCallExport';
+import { useFilterState } from '@/hooks/useFilterState';
 
 // ─── Session helpers ────────────────────────────────────────────────────────
 
@@ -30,349 +48,6 @@ function saveSession(data: any) {
 function getSession(): any | null {
   const s = sessionStorage.getItem('gongwizard_session');
   return s ? JSON.parse(s) : null;
-}
-
-// ─── Token estimation ───────────────────────────────────────────────────────
-
-// ~4 chars per token is a common English heuristic (GPT tokenizer average)
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
-
-function contextLabel(tokens: number): string {
-  if (tokens < 8000) return 'Fits GPT-3.5 (8K)';
-  if (tokens < 16000) return 'Fits Claude Haiku (16K)';
-  if (tokens < 32000) return 'Fits ChatGPT Plus (32K)';
-  if (tokens < 128000) return 'Fits GPT-4o / Claude (128K)';
-  if (tokens < 200000) return 'Fits Claude (200K)';
-  return 'Exceeds most context windows';
-}
-
-function contextColor(tokens: number): string {
-  if (tokens < 32000) return 'text-green-600 dark:text-green-400';
-  if (tokens < 128000) return 'text-yellow-600 dark:text-yellow-400';
-  return 'text-red-600 dark:text-red-400';
-}
-
-// ─── File download helper ───────────────────────────────────────────────────
-
-function downloadFile(content: string, filename: string, mimeType: string) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-// ─── Duration formatting ────────────────────────────────────────────────────
-
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-}
-
-function isInternalParty(party: any, internalDomains: string[]): boolean {
-  // Gong's affiliation field is primary signal; domain match is fallback when affiliation is missing
-  if (party.affiliation === 'Internal') return true;
-  const email: string = party.emailAddress || '';
-  const domain = email.includes('@') ? email.split('@')[1]?.toLowerCase() : '';
-  return !!(domain && internalDomains.includes(domain));
-}
-
-// ─── Transcript formatting ──────────────────────────────────────────────────
-
-interface Speaker {
-  speakerId: string;
-  name: string;
-  firstName: string;
-  isInternal: boolean;
-  title?: string;
-}
-
-interface TranscriptSentence {
-  speakerId: string;
-  text: string;
-  start: number;
-}
-
-interface FormattedTurn {
-  speakerId: string;
-  firstName: string;
-  isInternal: boolean;
-  timestamp: string;
-  text: string;
-}
-
-function formatTimestamp(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const min = Math.floor(totalSeconds / 60);
-  const sec = totalSeconds % 60;
-  return `${min}:${sec.toString().padStart(2, '0')}`;
-}
-
-function groupTranscriptTurns(
-  sentences: TranscriptSentence[],
-  speakerMap: Map<string, Speaker>
-): FormattedTurn[] {
-  const turns: FormattedTurn[] = [];
-  let current: { speakerId: string; sentences: TranscriptSentence[] } | null = null;
-
-  function flushGroup() {
-    if (!current) return;
-    const spk = speakerMap.get(current.speakerId);
-    const firstName = spk?.firstName || spk?.name?.split(' ')[0] || 'Unknown';
-    const isInternal = spk?.isInternal ?? true;
-    const ts = formatTimestamp(current.sentences[0].start);
-    const text = current.sentences.map((s) => s.text).join(' ');
-    turns.push({ speakerId: current.speakerId, firstName, isInternal, timestamp: ts, text });
-  }
-
-  for (const sentence of sentences) {
-    if (!current || current.speakerId !== sentence.speakerId) {
-      flushGroup();
-      current = { speakerId: sentence.speakerId, sentences: [sentence] };
-    } else {
-      current.sentences.push(sentence);
-    }
-  }
-  flushGroup();
-
-  return turns;
-}
-
-// ─── Export formatting ──────────────────────────────────────────────────────
-
-interface CallForExport {
-  id: string;
-  title: string;
-  date: string;
-  duration: number;
-  accountName: string;
-  speakers: Speaker[];
-  brief: string;
-  turns: FormattedTurn[];
-  interactionStats?: any;
-}
-
-function buildMarkdown(calls: CallForExport[], opts: ExportOptions): string {
-  const now = new Date().toISOString().split('T')[0];
-  const allText = calls.map((c) => buildCallText(c, opts)).join('\n\n---\n\n');
-  const tokens = estimateTokens(allText);
-
-  let out = `# Call Transcripts Export\n`;
-  out += `Generated: ${now}\n`;
-  out += `Total Calls: ${calls.length}\n`;
-  out += `Estimated Tokens: ~${tokens.toLocaleString()}\n\n---\n\n`;
-  out += allText;
-  return out;
-}
-
-function buildCallText(call: CallForExport, opts: ExportOptions): string {
-  let out = `## Call: ${call.title}\n`;
-  out += `**Date:** ${call.date} | **Duration:** ${formatDuration(call.duration)}\n`;
-  if (opts.includeMetadata && call.accountName) {
-    out += `**Account:** ${call.accountName}\n`;
-  }
-  out += '\n';
-
-  if (opts.includeMetadata && call.speakers.length > 0) {
-    out += `### Speakers\n`;
-    for (const s of call.speakers) {
-      out += `- ${s.name} [${s.isInternal ? 'I' : 'E'}]${s.title ? `: ${s.title}` : ''}\n`;
-    }
-    out += '\n';
-  }
-
-  if (opts.includeAIBrief && call.brief) {
-    out += `### Gong AI Brief\n${call.brief}\n\n`;
-  }
-
-  if (opts.includeInteractionStats && call.interactionStats) {
-    out += `### Interaction Stats\n`;
-    const stats = call.interactionStats;
-    if (stats.talkRatio != null) out += `- Talk Ratio: ${Math.round(stats.talkRatio * 100)}%\n`;
-    if (stats.interactivity != null) out += `- Interactivity: ${(stats.interactivity).toFixed(2)}\n`;
-    if (stats.longestMonologue != null) out += `- Longest Monologue: ${formatDuration(Math.round(stats.longestMonologue))}\n`;
-    if (stats.patience != null) out += `- Patience: ${(stats.patience).toFixed(2)}\n`;
-    if (stats.questionRate != null) out += `- Question Rate: ${(stats.questionRate).toFixed(2)}\n`;
-    out += '\n';
-  }
-
-  out += `### Transcript\n`;
-  out += `[I]=Internal, [E]=External (shown in ALL CAPS)\n\n`;
-
-  let turns = call.turns;
-  if (opts.removeFillerGreetings) {
-    turns = filterFillerTurns(turns);
-  }
-  if (opts.condenseMonologues) {
-    turns = condenseInternalMonologues(turns);
-  }
-
-  for (const turn of turns) {
-    const label = `${turn.isInternal ? 'I' : 'E'}`;
-    const text = turn.isInternal ? turn.text : turn.text.toUpperCase();
-    out += `${turn.timestamp} | ${turn.firstName} [${label}]\n${text}\n\n`;
-  }
-
-  return out;
-}
-
-function buildXML(calls: CallForExport[], opts: ExportOptions): string {
-  const now = new Date().toISOString().split('T')[0];
-  let out = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-  out += `<calls export_date="${now}" total="${calls.length}">\n`;
-
-  for (const call of calls) {
-    let turns = call.turns;
-    if (opts.removeFillerGreetings) turns = filterFillerTurns(turns);
-    if (opts.condenseMonologues) turns = condenseInternalMonologues(turns);
-
-    out += `  <call id="${escapeXml(call.id)}" title="${escapeXml(call.title)}" date="${escapeXml(call.date)}" duration="${call.duration}">\n`;
-
-    if (opts.includeMetadata) {
-      out += `    <speakers>\n`;
-      for (const s of call.speakers) {
-        out += `      <speaker name="${escapeXml(s.name)}" role="${s.isInternal ? 'I' : 'E'}"${s.title ? ` title="${escapeXml(s.title)}"` : ''}/>\n`;
-      }
-      out += `    </speakers>\n`;
-    }
-
-    if (opts.includeAIBrief && call.brief) {
-      out += `    <brief>${escapeXml(call.brief)}</brief>\n`;
-    }
-
-    if (opts.includeInteractionStats && call.interactionStats) {
-      const stats = call.interactionStats;
-      out += `    <interactionStats`;
-      if (stats.talkRatio != null) out += ` talkRatio="${Math.round(stats.talkRatio * 100)}"`;
-      if (stats.interactivity != null) out += ` interactivity="${stats.interactivity.toFixed(2)}"`;
-      if (stats.longestMonologue != null) out += ` longestMonologue="${Math.round(stats.longestMonologue)}"`;
-      if (stats.patience != null) out += ` patience="${stats.patience.toFixed(2)}"`;
-      if (stats.questionRate != null) out += ` questionRate="${stats.questionRate.toFixed(2)}"`;
-      out += `/>\n`;
-    }
-
-    out += `    <transcript>\n`;
-    for (const turn of turns) {
-      const text = turn.isInternal ? turn.text : turn.text.toUpperCase();
-      out += `      <turn speaker="${escapeXml(turn.firstName)}" role="${turn.isInternal ? 'I' : 'E'}" time="${escapeXml(turn.timestamp)}">${escapeXml(text)}</turn>\n`;
-    }
-    out += `    </transcript>\n`;
-    out += `  </call>\n`;
-  }
-
-  out += `</calls>`;
-  return out;
-}
-
-function buildJSONL(calls: CallForExport[], opts: ExportOptions): string {
-  return calls
-    .map((call) => {
-      let turns = call.turns;
-      if (opts.removeFillerGreetings) turns = filterFillerTurns(turns);
-      if (opts.condenseMonologues) turns = condenseInternalMonologues(turns);
-
-      const obj: any = {
-        id: call.id,
-        title: call.title,
-        date: call.date,
-        duration: call.duration,
-      };
-      if (opts.includeMetadata) {
-        obj.accountName = call.accountName;
-        obj.speakers = call.speakers.map((s) => ({
-          name: s.name,
-          role: s.isInternal ? 'I' : 'E',
-          title: s.title,
-        }));
-      }
-      if (opts.includeAIBrief) {
-        obj.brief = call.brief;
-      }
-      obj.transcript = turns.map((t) => ({
-        time: t.timestamp,
-        speaker: t.firstName,
-        role: t.isInternal ? 'I' : 'E',
-        text: t.isInternal ? t.text : t.text.toUpperCase(),
-      }));
-      return JSON.stringify(obj);
-    })
-    .join('\n');
-}
-
-function buildExportContent(
-  calls: CallForExport[],
-  format: 'markdown' | 'xml' | 'jsonl',
-  opts: ExportOptions
-): { content: string; extension: string; mimeType: string } {
-  if (format === 'markdown') {
-    return { content: buildMarkdown(calls, opts), extension: 'md', mimeType: 'text/markdown' };
-  } else if (format === 'xml') {
-    return { content: buildXML(calls, opts), extension: 'xml', mimeType: 'application/xml' };
-  } else {
-    return { content: buildJSONL(calls, opts), extension: 'jsonl', mimeType: 'application/jsonl' };
-  }
-}
-
-function escapeXml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-// Matches short social fillers (greetings, acknowledgments) with optional trailing punctuation
-const FILLER_PATTERNS = [
-  /^(hi|hello|hey|thanks|thank you|bye|goodbye|talk soon|have a great|sounds good|absolutely|of course|sure|yeah|yes|no|okay|ok|alright|right|great|perfect)[!.,\s]*$/i,
-];
-
-function filterFillerTurns(turns: FormattedTurn[]): FormattedTurn[] {
-  return turns.filter((t) => {
-    const trimmed = t.text.trim();
-    if (trimmed.length < 5) return false;
-    return !FILLER_PATTERNS.some((p) => p.test(trimmed));
-  });
-}
-
-function condenseInternalMonologues(turns: FormattedTurn[]): FormattedTurn[] {
-  const result: FormattedTurn[] = [];
-  let i = 0;
-  while (i < turns.length) {
-    const turn = turns[i];
-    if (turn.isInternal) {
-      let j = i + 1;
-      const group: FormattedTurn[] = [turn];
-      while (j < turns.length && turns[j].isInternal && turns[j].speakerId === turn.speakerId) {
-        group.push(turns[j]);
-        j++;
-      }
-      // Only condense runs of 3+ consecutive turns; short back-and-forth preserved
-      if (group.length > 2) {
-        const condensed: FormattedTurn = {
-          ...turn,
-          text: group.map((t) => t.text).join(' '),
-        };
-        result.push(condensed);
-        i = j;
-      } else {
-        result.push(turn);
-        i++;
-      }
-    } else {
-      result.push(turn);
-      i++;
-    }
-  }
-  return result;
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -391,14 +66,11 @@ interface GongCall {
   internalSpeakerCount: number;
   externalSpeakerCount: number;
   talkRatio?: number;
-}
-
-interface ExportOptions {
-  removeFillerGreetings: boolean;
-  condenseMonologues: boolean;
-  includeMetadata: boolean;
-  includeAIBrief: boolean;
-  includeInteractionStats: boolean;
+  keyPoints?: string[];
+  actionItems?: string[];
+  outline?: Array<{ name: string; startTimeMs: number; durationMs: number; items?: Array<{ text: string; startTimeMs: number; durationMs: number }> }>;
+  questions?: any[];
+  url?: string;
 }
 
 // ─── Main component ─────────────────────────────────────────────────────────
@@ -417,9 +89,6 @@ export default function CallsPage() {
   const [hasLoaded, setHasLoaded] = useState(false);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [searchText, setSearchText] = useState('');
-  const [excludeInternal, setExcludeInternal] = useState(false);
-  const [activeTrackers, setActiveTrackers] = useState<Set<string>>(new Set());
   const [workspaceId, setWorkspaceId] = useState<string>('');
 
   const [exportFormat, setExportFormat] = useState<'markdown' | 'xml' | 'jsonl'>('markdown');
@@ -430,8 +99,16 @@ export default function CallsPage() {
     includeAIBrief: true,
     includeInteractionStats: true,
   });
-  const [exporting, setExporting] = useState(false);
-  const [copied, setCopied] = useState(false);
+
+  const filters = useFilterState();
+
+  const { exporting, copied, handleExport, handleCopy } = useCallExport({
+    selectedIds,
+    session,
+    calls,
+    exportFormat,
+    exportOpts,
+  });
 
   useEffect(() => {
     const s = getSession();
@@ -447,35 +124,46 @@ export default function CallsPage() {
     return session.trackers.map((t: any) => t.name || t.id || String(t));
   }, [session]);
 
+  const allTopics = useMemo(() => {
+    const topicSet = new Set<string>();
+    for (const call of calls) {
+      for (const t of call.topics || []) topicSet.add(t);
+    }
+    return [...topicSet].sort();
+  }, [calls]);
+
+  const trackerCounts = useMemo(
+    () => computeTrackerCounts(calls, allTrackers),
+    [calls, allTrackers]
+  );
+
+  const topicCounts = useMemo(() => computeTopicCounts(calls), [calls]);
+
   const filteredCalls = useMemo(() => {
     return calls.filter((call) => {
-      if (excludeInternal && call.externalSpeakerCount === 0) return false;
-      if (searchText.trim()) {
-        const q = searchText.toLowerCase();
-        const inTitle = call.title.toLowerCase().includes(q);
-        const inBrief = (call.brief || '').toLowerCase().includes(q);
-        if (!inTitle && !inBrief) return false;
-      }
-      if (activeTrackers.size > 0) {
-        const callTrackers = new Set(call.trackers || []);
-        const hasMatch = [...activeTrackers].some((t) => callTrackers.has(t));
-        if (!hasMatch) return false;
-      }
+      if (filters.excludeInternal && call.externalSpeakerCount === 0) return false;
+      if (!matchesTextSearch(call, filters.searchText)) return false;
+      if (!matchesTrackers(call, filters.activeTrackers)) return false;
+      if (!matchesTopics(call, filters.activeTopics)) return false;
+      if (!matchesDurationRange(call, filters.durationRange[0], filters.durationRange[1])) return false;
+      if (!matchesTalkRatioRange(call, filters.talkRatioRange[0], filters.talkRatioRange[1])) return false;
+      if (!matchesParticipantName(call, filters.participantSearch)) return false;
+      if (!matchesMinExternalSpeakers(call, filters.minExternalSpeakers)) return false;
+      if (!matchesAiContentSearch(call, filters.aiContentSearch)) return false;
       return true;
     });
-  }, [calls, excludeInternal, searchText, activeTrackers]);
-
-  const trackerCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const t of allTrackers) counts[t] = 0;
-    for (const call of calls) {
-      for (const t of call.trackers || []) {
-        if (counts[t] !== undefined) counts[t]++;
-        else counts[t] = 1;
-      }
-    }
-    return counts;
-  }, [calls, allTrackers]);
+  }, [
+    calls,
+    filters.excludeInternal,
+    filters.searchText,
+    filters.activeTrackers,
+    filters.activeTopics,
+    filters.durationRange,
+    filters.talkRatioRange,
+    filters.participantSearch,
+    filters.minExternalSpeakers,
+    filters.aiContentSearch,
+  ]);
 
   const selectedCalls = useMemo(
     () => calls.filter((c) => selectedIds.has(c.id)),
@@ -519,8 +207,8 @@ export default function CallsPage() {
         let internalCount = 0;
         let externalCount = 0;
         for (const p of parties) {
-          const isInternal = isInternalParty(p, internalDomains);
-          if (isInternal) internalCount++;
+          const internal = isInternalParty(p, internalDomains);
+          if (internal) internalCount++;
           else externalCount++;
         }
 
@@ -545,6 +233,11 @@ export default function CallsPage() {
           internalSpeakerCount: internalCount,
           externalSpeakerCount: externalCount,
           talkRatio: call.interactionStats?.talkRatio ?? undefined,
+          keyPoints: call.keyPoints || [],
+          actionItems: call.actionItems || [],
+          outline: call.outline || [],
+          questions: call.questions || [],
+          url: call.url,
         };
       });
 
@@ -574,118 +267,12 @@ export default function CallsPage() {
     setSelectedIds(new Set());
   }
 
-  function toggleTracker(name: string) {
-    setActiveTrackers((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-  }
-
   function disconnect() {
     sessionStorage.removeItem('gongwizard_session');
     router.replace('/');
   }
 
-  async function fetchTranscriptsForSelected(): Promise<CallForExport[]> {
-    const ids = [...selectedIds];
-    const res = await fetch('/api/gong/transcripts', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Gong-Auth': session.authHeader,
-      },
-      body: JSON.stringify({ callIds: ids, baseUrl: session.baseUrl }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to fetch transcripts');
-
-    const internalDomains: string[] = session.internalDomains || [];
-    const callMap = new Map(calls.map((c) => [c.id, c]));
-
-    return (data.transcripts || [])
-      .filter((t: any) => callMap.has(t.callId))
-      .map((t: any) => {
-      const callMeta = callMap.get(t.callId)!;
-      // Transcript endpoint doesn't return parties — use stored call data
-      const parties: any[] = callMeta.parties || [];
-
-      const speakerMap = new Map<string, Speaker>();
-      for (const p of parties) {
-        const isInternal = isInternalParty(p, internalDomains);
-        const fullName = p.name || [p.firstName, p.lastName].filter(Boolean).join(' ') || 'Unknown';
-        speakerMap.set(p.speakerId || p.userId || p.id, {
-          speakerId: p.speakerId || p.userId || p.id,
-          name: fullName,
-          firstName: p.firstName || fullName.split(' ')[0],
-          isInternal,
-          title: p.title || '',
-        });
-      }
-
-      const sentences: TranscriptSentence[] = [];
-      for (const track of t.transcript || []) {
-        const speakerId = track.speakerId;
-        for (const sentence of track.sentences || []) {
-          sentences.push({
-            speakerId,
-            text: sentence.text,
-            start: sentence.start,
-          });
-        }
-      }
-      sentences.sort((a, b) => a.start - b.start);
-
-      const turns = groupTranscriptTurns(sentences, speakerMap);
-
-      return {
-        id: t.callId,
-        title: callMeta.title || 'Untitled Call',
-        date: callMeta.started ? callMeta.started.split('T')[0] : '',
-        duration: callMeta.duration || 0,
-        accountName: callMeta.accountName || '',
-        speakers: [...speakerMap.values()],
-        brief: callMeta.brief || '',
-        turns,
-        interactionStats: callMeta.interactionStats || undefined,
-      };
-    });
-  }
-
-  async function handleExport() {
-    if (selectedIds.size === 0) return;
-    setExporting(true);
-    try {
-      const callsForExport = await fetchTranscriptsForSelected();
-      const { content, extension, mimeType } = buildExportContent(callsForExport, exportFormat, exportOpts);
-      downloadFile(content, `gong-transcripts-${format(new Date(), 'yyyy-MM-dd')}.${extension}`, mimeType);
-    } catch (err: any) {
-      alert(err.message || 'Export failed');
-    } finally {
-      setExporting(false);
-    }
-  }
-
-  async function handleCopy() {
-    if (selectedIds.size === 0) return;
-    setExporting(true);
-    try {
-      const callsForExport = await fetchTranscriptsForSelected();
-      const { content } = buildExportContent(callsForExport, exportFormat, exportOpts);
-      await navigator.clipboard.writeText(content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err: any) {
-      alert(err.message || 'Copy failed');
-    } finally {
-      setExporting(false);
-    }
-  }
-
   const tokenEstimate = useMemo(() => {
-    // Rough estimate: ~4-8K tokens per 30min call. Use duration as proxy.
-    // Average speaking rate ~130 words/min (below the ~150 avg to account for pauses), ~1.3 tokens/word
     return selectedCalls.reduce((sum, c) => {
       const minutes = c.duration / 60;
       const estimatedWords = minutes * 130;
@@ -777,28 +364,109 @@ export default function CallsPage() {
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Filters
               </h3>
+
+              {/* AI Content Search */}
+              <div className="space-y-1">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+                  <Input
+                    placeholder="Search AI summaries…"
+                    value={filters.aiContentSearch}
+                    onChange={(e) => filters.setAiContentSearch(e.target.value)}
+                    className="pl-8 h-8 text-sm border-blue-200 dark:border-blue-800"
+                  />
+                </div>
+                <p className="text-[10px] text-muted-foreground">Searches brief, key points, action items, outline</p>
+              </div>
+
+              {/* Text search */}
               <div className="relative">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
                 <Input
                   placeholder="Search calls…"
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
+                  value={filters.searchText}
+                  onChange={(e) => filters.setSearchText(e.target.value)}
                   className="pl-8 h-8 text-sm"
                 />
               </div>
             </div>
 
+            {/* Exclude internal */}
             <div className="flex items-center gap-2">
               <Checkbox
                 id="excludeInternal"
-                checked={excludeInternal}
-                onCheckedChange={(v) => setExcludeInternal(!!v)}
+                checked={filters.excludeInternal}
+                onCheckedChange={(v) => filters.setExcludeInternal(!!v)}
               />
               <Label htmlFor="excludeInternal" className="text-sm leading-tight cursor-pointer">
                 Exclude internal-only calls
               </Label>
             </div>
 
+            {/* Duration Range */}
+            {hasLoaded && calls.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Duration
+                </h3>
+                <Slider
+                  min={0}
+                  max={7200}
+                  step={60}
+                  value={filters.durationRange}
+                  onValueChange={(v) => filters.setDurationRange(v as [number, number])}
+                />
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>{formatDuration(filters.durationRange[0])}</span>
+                  <span>{formatDuration(filters.durationRange[1])}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Talk Ratio Range */}
+            {hasLoaded && calls.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Talk Ratio
+                </h3>
+                <Slider
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={filters.talkRatioRange}
+                  onValueChange={(v) => filters.setTalkRatioRange(v as [number, number])}
+                />
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>{filters.talkRatioRange[0]}%</span>
+                  <span>{filters.talkRatioRange[1]}%</span>
+                </div>
+              </div>
+            )}
+
+            {/* Min External Speakers */}
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground whitespace-nowrap">Min external</Label>
+              <Input
+                type="number"
+                min={0}
+                max={10}
+                value={filters.minExternalSpeakers}
+                onChange={(e) => filters.setMinExternalSpeakers(Number(e.target.value) || 0)}
+                className="h-7 w-16 text-xs"
+              />
+            </div>
+
+            {/* Participant Search */}
+            <div className="space-y-1">
+              <Input
+                placeholder="Search participants…"
+                value={filters.participantSearch}
+                onChange={(e) => filters.setParticipantSearch(e.target.value)}
+                className="h-8 text-sm"
+              />
+            </div>
+
+            {/* Trackers */}
             {allTrackers.length > 0 && (
               <div className="space-y-2">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -809,8 +477,8 @@ export default function CallsPage() {
                     <div key={tracker} className="flex items-center gap-2">
                       <Checkbox
                         id={`tracker-${tracker}`}
-                        checked={activeTrackers.has(tracker)}
-                        onCheckedChange={() => toggleTracker(tracker)}
+                        checked={filters.activeTrackers.has(tracker)}
+                        onCheckedChange={() => filters.toggleTracker(tracker)}
                       />
                       <Label
                         htmlFor={`tracker-${tracker}`}
@@ -821,6 +489,33 @@ export default function CallsPage() {
                       <span className="text-xs text-muted-foreground">
                         {trackerCounts[tracker] ?? 0}
                       </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Topics */}
+            {allTopics.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Topics
+                </h3>
+                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                  {allTopics.map((topic) => (
+                    <div key={topic} className="flex items-center gap-2">
+                      <Checkbox
+                        id={`topic-${topic}`}
+                        checked={filters.activeTopics.has(topic)}
+                        onCheckedChange={() => filters.toggleTopic(topic)}
+                      />
+                      <Label
+                        htmlFor={`topic-${topic}`}
+                        className="text-sm leading-tight cursor-pointer flex-1 truncate"
+                      >
+                        {topic}
+                      </Label>
+                      <span className="text-xs text-muted-foreground">{topicCounts[topic] ?? 0}</span>
                     </div>
                   ))}
                 </div>
@@ -843,8 +538,8 @@ export default function CallsPage() {
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
             <Input
               placeholder="Search calls…"
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
+              value={filters.searchText}
+              onChange={(e) => filters.setSearchText(e.target.value)}
               className="pl-8 h-8 text-sm"
             />
           </div>
@@ -949,8 +644,8 @@ export default function CallsPage() {
                       ) : null}
 
                       {call.brief && (
-                        <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                          {call.brief}
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          {truncateToFirstSentence(call.brief)}
                         </p>
                       )}
 
