@@ -1,19 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-class GongApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    public endpoint: string
-  ) {
-    super(message);
-    this.name = 'GongApiError';
-  }
-}
-
-function sleep(ms: number) {
-  return new Promise(r => setTimeout(r, ms));
-}
+import { GongApiError, sleep, makeGongFetch, handleGongError, GONG_RATE_LIMIT_MS, EXTENSIVE_BATCH_SIZE } from '@/lib/gong-api';
 
 // Extract values from Gong's nested context.objects.fields structure
 // Ported from Python v1 extract_field_values()
@@ -64,25 +50,7 @@ export async function POST(request: NextRequest) {
     }
 
     const baseUrl = (rawBaseUrl || 'https://api.gong.io').replace(/\/+$/, '');
-
-    async function gongFetch(endpoint: string, options: RequestInit = {}) {
-      const url = `${baseUrl}${endpoint}`;
-      const response = await fetch(url, {
-        ...options,
-        headers: {
-          'Authorization': `Basic ${authHeader}`,
-          'Content-Type': 'application/json',
-          ...options.headers,
-        },
-      });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new GongApiError(response.status, text, endpoint);
-      }
-
-      return response.json();
-    }
+    const gongFetch = makeGongFetch(baseUrl, authHeader);
 
     // Step 1: Fetch all call IDs for the date range (paginated GET)
     const basicCalls: any[] = [];
@@ -101,7 +69,7 @@ export async function POST(request: NextRequest) {
       basicCalls.push(...page);
 
       cursor = data?.records?.cursor;
-      if (cursor) await sleep(350);
+      if (cursor) await sleep(GONG_RATE_LIMIT_MS);
     } while (cursor);
 
     if (basicCalls.length === 0) {
@@ -111,12 +79,11 @@ export async function POST(request: NextRequest) {
     const callIds = basicCalls.map((c: any) => c.id).filter(Boolean);
 
     // Step 2: Fetch extensive details in batches of 10
-    const BATCH_SIZE = 10;
     const extensiveCalls: any[] = [];
     let extensiveFailed = false;
 
-    for (let i = 0; i < callIds.length; i += BATCH_SIZE) {
-      const batch = callIds.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < callIds.length; i += EXTENSIVE_BATCH_SIZE) {
+      const batch = callIds.slice(i, i + EXTENSIVE_BATCH_SIZE);
 
       try {
         let batchCursor: string | undefined;
@@ -151,7 +118,7 @@ export async function POST(request: NextRequest) {
           extensiveCalls.push(...page);
 
           batchCursor = data?.records?.cursor;
-          if (batchCursor) await sleep(350);
+          if (batchCursor) await sleep(GONG_RATE_LIMIT_MS);
         } while (batchCursor);
 
       } catch (err) {
@@ -162,7 +129,7 @@ export async function POST(request: NextRequest) {
         throw err;
       }
 
-      if (i + BATCH_SIZE < callIds.length) await sleep(350);
+      if (i + EXTENSIVE_BATCH_SIZE < callIds.length) await sleep(GONG_RATE_LIMIT_MS);
     }
 
     // Step 3: Normalize response shape
@@ -209,19 +176,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ calls: normalized });
 
   } catch (error) {
-    console.error('Calls fetch error:', error);
-    if (error instanceof GongApiError) {
-      if (error.status === 401) {
-        return NextResponse.json({ error: 'Invalid API credentials' }, { status: 401 });
-      }
-      return NextResponse.json(
-        { error: `Gong API error (${error.status}): ${error.message}` },
-        { status: error.status >= 400 && error.status < 500 ? error.status : 500 }
-      );
-    }
-    return NextResponse.json(
-      { error: 'Failed to fetch calls from Gong' },
-      { status: 500 }
-    );
+    return handleGongError(error);
   }
 }

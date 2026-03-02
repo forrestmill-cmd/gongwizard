@@ -1,19 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-class GongApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    public endpoint: string
-  ) {
-    super(message);
-    this.name = 'GongApiError';
-  }
-}
-
-function sleep(ms: number) {
-  return new Promise(r => setTimeout(r, ms));
-}
+import { sleep, makeGongFetch, handleGongError, GONG_RATE_LIMIT_MS, TRANSCRIPT_BATCH_SIZE } from '@/lib/gong-api';
 
 export async function POST(request: NextRequest) {
   try {
@@ -30,31 +16,12 @@ export async function POST(request: NextRequest) {
     }
 
     const baseUrl = (rawBaseUrl || 'https://api.gong.io').replace(/\/+$/, '');
+    const gongFetch = makeGongFetch(baseUrl, authHeader);
 
-    async function gongFetch(endpoint: string, options: RequestInit = {}) {
-      const url = `${baseUrl}${endpoint}`;
-      const response = await fetch(url, {
-        ...options,
-        headers: {
-          'Authorization': `Basic ${authHeader}`,
-          'Content-Type': 'application/json',
-          ...options.headers,
-        },
-      });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new GongApiError(response.status, text, endpoint);
-      }
-
-      return response.json();
-    }
-
-    const BATCH_SIZE = 50;
     const transcriptMap: Record<string, any[]> = {};
 
-    for (let i = 0; i < callIds.length; i += BATCH_SIZE) {
-      const batch = callIds.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < callIds.length; i += TRANSCRIPT_BATCH_SIZE) {
+      const batch = callIds.slice(i, i + TRANSCRIPT_BATCH_SIZE);
       let cursor: string | undefined;
 
       do {
@@ -78,10 +45,10 @@ export async function POST(request: NextRequest) {
         }
 
         cursor = data?.records?.cursor;
-        if (cursor) await sleep(350);
+        if (cursor) await sleep(GONG_RATE_LIMIT_MS);
       } while (cursor);
 
-      if (i + BATCH_SIZE < callIds.length) await sleep(350);
+      if (i + TRANSCRIPT_BATCH_SIZE < callIds.length) await sleep(GONG_RATE_LIMIT_MS);
     }
 
     // Return as array of { callId, transcript } for the UI
@@ -92,19 +59,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ transcripts });
 
   } catch (error) {
-    console.error('Transcripts fetch error:', error);
-    if (error instanceof GongApiError) {
-      if (error.status === 401) {
-        return NextResponse.json({ error: 'Invalid API credentials' }, { status: 401 });
-      }
-      return NextResponse.json(
-        { error: `Gong API error (${error.status}): ${error.message}` },
-        { status: error.status >= 400 && error.status < 500 ? error.status : 500 }
-      );
-    }
-    return NextResponse.json(
-      { error: 'Failed to fetch transcripts from Gong' },
-      { status: 500 }
-    );
+    return handleGongError(error);
   }
 }

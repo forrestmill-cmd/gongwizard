@@ -1,15 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-class GongApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    public endpoint: string
-  ) {
-    super(message);
-    this.name = 'GongApiError';
-  }
-}
+import { GongApiError, sleep, makeGongFetch, handleGongError, GONG_RATE_LIMIT_MS } from '@/lib/gong-api';
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,25 +10,7 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json().catch(() => ({}));
     const baseUrl = (body.baseUrl || 'https://api.gong.io').replace(/\/+$/, '');
-
-    async function gongFetch(endpoint: string, options: RequestInit = {}) {
-      const url = `${baseUrl}${endpoint}`;
-      const response = await fetch(url, {
-        ...options,
-        headers: {
-          'Authorization': `Basic ${authHeader}`,
-          'Content-Type': 'application/json',
-          ...options.headers,
-        },
-      });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new GongApiError(response.status, text, endpoint);
-      }
-
-      return response.json();
-    }
+    const gongFetch = makeGongFetch(baseUrl, authHeader);
 
     async function fetchAllPages<T>(
       endpoint: string,
@@ -67,7 +39,7 @@ export async function POST(request: NextRequest) {
 
         cursor = data?.records?.cursor;
         if (cursor) {
-          await new Promise(r => setTimeout(r, 350));
+          await sleep(GONG_RATE_LIMIT_MS);
         }
       } while (cursor);
 
@@ -116,16 +88,6 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Connect error:', error);
-    if (error instanceof GongApiError) {
-      return NextResponse.json(
-        { error: `Gong API error (${error.status}): ${error.message}` },
-        { status: error.status >= 400 && error.status < 500 ? error.status : 500 }
-      );
-    }
-    return NextResponse.json(
-      { error: 'Failed to connect to Gong' },
-      { status: 500 }
-    );
+    return handleGongError(error);
   }
 }
