@@ -1,328 +1,575 @@
-# API Routes
-
-## Route Summary Table
-
-| Method | Path | Auth Required | Purpose | Response Type |
-|--------|------|---------------|---------|---------------|
-| POST | `/api/auth` | None (public) | Validate site password; issue `gw-auth` session cookie | `{ ok: true }` |
-| POST | `/api/gong/calls` | `gw-auth` cookie + `X-Gong-Auth` header | Fetch paginated call list and extensive call metadata for a date range | `{ calls: NormalizedCall[] }` |
-| POST | `/api/gong/connect` | `gw-auth` cookie + `X-Gong-Auth` header | Verify Gong credentials; fetch users, trackers, workspaces, derive internal domains | `{ users, trackers, workspaces, internalDomains, baseUrl, warnings? }` |
-| POST | `/api/gong/transcripts` | `gw-auth` cookie + `X-Gong-Auth` header | Fetch transcript monologues for a batch of call IDs | `{ transcripts: { callId, transcript }[] }` |
-
-Routes are grouped by feature area below.
-
----
+# GongWizard — API Routes
 
 ## Authentication
 
-GongWizard uses a two-layer auth model with no database.
+GongWizard uses a two-layer auth model.
 
-### Layer 1 — Site password gate
+### Layer 1: Site password gate (cookie)
 
-Every page request (except `/gate`, `/api/*`, `/_next/*`, and `/favicon`) passes through `src/middleware.ts`. The middleware checks for a `gw-auth` cookie with value `"1"`. If absent, the request is redirected to `/gate`.
+All page routes (except `/gate`, `/api/*`, `/_next/*`, `/favicon`) are protected by `src/middleware.ts`. The middleware checks for a `gw-auth` cookie with value `"1"`. If absent, it redirects to `/gate`.
 
-The `gw-auth` cookie is issued by `POST /api/auth` after the user submits the correct `SITE_PASSWORD` environment variable. The cookie is `httpOnly`, `sameSite: lax`, and expires after 7 days (604800 seconds).
+The cookie is issued by `POST /api/auth` after the user supplies the correct `SITE_PASSWORD` environment variable. It is set as `httpOnly`, `sameSite: lax`, with a 7-day `maxAge`. There is no JWT or session database — the cookie value is a plain sentinel string.
 
-API routes (`/api/*`) are explicitly excluded from the middleware check — they rely on Layer 2 instead.
+API routes are explicitly excluded from the middleware check (`pathname.startsWith('/api/')`). They enforce their own credential requirements via the `X-Gong-Auth` header.
 
-### Layer 2 — Gong API credentials via `X-Gong-Auth` header
+### Layer 2: Gong API credentials (request header)
 
-All three Gong proxy routes (`/api/gong/connect`, `/api/gong/calls`, `/api/gong/transcripts`) require the `X-Gong-Auth` request header. The value is a Base64-encoded `accessKey:secretKey` string, produced in the browser via `btoa(`${accessKey}:${secretKey}`)`. The server forwards it as `Authorization: Basic <value>` on every upstream Gong API call via `makeGongFetch` in `src/lib/gong-api.ts`.
+All three Gong proxy routes (`/api/gong/connect`, `/api/gong/calls`, `/api/gong/transcripts`) require a `X-Gong-Auth` header. Its value is the Base64 encoding of `accessKey:secretKey` — identical to an HTTP Basic auth credential string, but passed as a custom header. The proxy forwards it verbatim as `Authorization: Basic <value>` on every Gong API request.
 
-Credentials are never stored server-side. The browser holds them in `sessionStorage` under the key `gongwizard_session`, which is cleared when the tab closes.
+Credentials are never stored server-side. The client creates the header in the browser from user-supplied keys and holds it in `sessionStorage` under the key `gongwizard_session`. The session is cleared when the tab closes.
+
+The analyze routes (`/api/analyze/*`) do not require `X-Gong-Auth`. They call internal AI providers and receive already-processed call data in the request body.
+
+---
+
+## Route Summary Table
+
+### Auth
+
+| Method | Path | Auth Required | Purpose | Response Type |
+|--------|------|---------------|---------|---------------|
+| POST | `/api/auth` | None | Validate site password; issue `gw-auth` cookie | `{ ok: true }` |
+
+### Gong Proxy
+
+| Method | Path | Auth Required | Purpose | Response Type |
+|--------|------|---------------|---------|---------------|
+| POST | `/api/gong/calls` | `X-Gong-Auth` | Fetch calls by date range with full extensive metadata | `{ calls: NormalizedCall[] }` |
+| POST | `/api/gong/connect` | `X-Gong-Auth` | Validate Gong credentials; fetch users, trackers, workspaces | `{ users, trackers, workspaces, internalDomains, baseUrl }` |
+| POST | `/api/gong/transcripts` | `X-Gong-Auth` | Fetch transcript monologues for a list of call IDs | `{ transcripts: { callId, transcript[] }[] }` |
+
+### Analyze (AI)
+
+| Method | Path | Auth Required | Purpose | Response Type |
+|--------|------|---------------|---------|---------------|
+| POST | `/api/analyze/followup` | None | Answer a follow-up question against processed call data | `{ answer, supporting_quotes[], calls_referenced[] }` |
+| POST | `/api/analyze/process` | None | Smart-truncate call monologues to retain question-relevant content | `{ truncated: { index, kept }[] }` |
+| POST | `/api/analyze/run` | None | Extract findings from a formatted transcript excerpt | `{ findings: Finding[] }` |
+| POST | `/api/analyze/score` | None | Score calls for relevance to a research question | `{ scores: CallScore[] }` |
+| POST | `/api/analyze/synthesize` | None | Synthesize cross-call themes from aggregated findings | `{ themes: Theme[], overall_summary }` |
+
+---
+
+## Per-Route Detail
+
+### `POST /api/auth`
+
+**File:** `src/app/api/auth/route.ts`
+
+**Auth:** None. This is the route that issues auth.
+
+**Request body:**
+```json
+{ "password": "string" }
+```
+
+**Success response (200):**
+```json
+{ "ok": true }
+```
+Sets cookie: `gw-auth=1; HttpOnly; SameSite=Lax; Max-Age=604800; Path=/`
+
+**Error responses:**
+
+| Status | Body |
+|--------|------|
+| 401 | `{ "error": "Incorrect password." }` |
+| 500 | `{ "error": "Server misconfigured" }` (when `SITE_PASSWORD` env var is missing) |
+
+**Notable behavior:** If `request.json()` fails to parse, `password` will be `undefined` and the 401 path is taken. The cookie `maxAge` is exactly `60 * 60 * 24 * 7` = 604800 seconds (7 days).
+
+---
+
+### `POST /api/gong/connect`
+
+**File:** `src/app/api/gong/connect/route.ts`
+
+**Auth:** `X-Gong-Auth: <base64(accessKey:secretKey)>` required. Returns 401 if absent or if Gong rejects the credentials.
+
+**Request body:**
+```json
+{
+  "baseUrl": "https://api.gong.io"
+}
+```
+`baseUrl` is optional. Defaults to `https://api.gong.io`. Trailing slashes are stripped.
+
+**Success response (200):**
+```typescript
+{
+  users: GongUser[];           // All users fetched from /v2/users (paginated)
+  trackers: GongTracker[];     // All trackers from /v2/settings/trackers (paginated)
+  workspaces: GongWorkspace[]; // From /v2/workspaces
+  internalDomains: string[];   // Email domains extracted from user records
+  baseUrl: string;             // Normalized base URL used for the requests
+  warnings?: string[];         // Non-fatal fetch failures (e.g., trackers unavailable)
+}
+```
+
+**Error responses:**
+
+| Status | Body |
+|--------|------|
+| 401 | `{ "error": "Missing credentials" }` (no header) |
+| 401 | `{ "error": "Invalid API credentials" }` (Gong 401) |
+| 500 | `{ "error": "Internal server error" }` |
+
+**Notable behavior:**
+- Fetches users, trackers, and workspaces in parallel via `Promise.allSettled`. Partial failures are tolerated — missing trackers or users produce a `warnings` array rather than a hard error.
+- If the users fetch fails with 401, the route returns 401 immediately (credential check).
+- `internalDomains` is derived by extracting the domain portion of every `emailAddress` in the users list. This is used client-side for speaker classification (internal vs. external).
+- Rate limit: 350ms sleep between paginated requests (`GONG_RATE_LIMIT_MS`).
+
+---
+
+### `POST /api/gong/calls`
+
+**File:** `src/app/api/gong/calls/route.ts`
+
+**Auth:** `X-Gong-Auth` required.
+
+**Request body:**
+```typescript
+{
+  fromDate: string;      // ISO 8601 datetime, required
+  toDate: string;        // ISO 8601 datetime, required
+  baseUrl?: string;      // Default: "https://api.gong.io"
+  workspaceId?: string;  // Optional Gong workspace filter
+}
+```
+
+**Success response (200):**
+```typescript
+{
+  calls: NormalizedCall[];
+}
+```
+
+`NormalizedCall` shape (output of `normalizeExtensiveCall`):
+```typescript
+{
+  id: string;
+  title: string;
+  started: string;           // ISO datetime
+  duration: number;          // seconds
+  url?: string;
+  direction?: string;
+  parties: any[];
+  topics: string[];
+  trackers: Array<{
+    name?: string;
+    occurrences: Array<{ startTimeMs: number; [key: string]: any }>;
+    [key: string]: any;
+  }>;
+  brief: string;
+  keyPoints: string[];
+  actionItems: string[];
+  outline: Array<{
+    name: string;
+    startTimeMs: number;
+    durationMs: number;
+    items: Array<{ text: string; startTimeMs: number; durationMs: number }>;
+  }>;
+  questions: any[];
+  interactionStats: any | null;
+  context: any[];
+  accountName: string;
+  accountIndustry: string;
+  accountWebsite: string;
+}
+```
+
+**Error responses:**
+
+| Status | Body |
+|--------|------|
+| 400 | `{ "error": "fromDate and toDate are required" }` |
+| 400 | `{ "error": "Date range exceeds maximum of 365 days" }` |
+| 401 | `{ "error": "Missing credentials" }` |
+| 401 | `{ "error": "Invalid API credentials" }` |
+| 500 | `{ "error": "Internal server error" }` |
+
+**Notable behavior:**
+- Maximum date range: 365 days (`MAX_DATE_RANGE_DAYS`). Enforced before any Gong requests.
+- The range is split into 30-day chunks (`CHUNK_DAYS = 30`) to avoid Gong API pagination limits. Chunks are fetched sequentially with 350ms delays between each.
+- Duplicate call IDs across chunk boundaries are deduplicated via a `Set`.
+- Extensive metadata is fetched in batches of 10 (`EXTENSIVE_BATCH_SIZE`) via `POST /v2/calls/extensive`. If that endpoint returns 403 (insufficient API scope), the route falls back to basic call data with empty `parties`, `topics`, `trackers`, `brief`, and `outline`.
+- `normalizeExtensiveCall` converts Gong's nested `metaData`/`content`/`interaction` structure into a flat shape. `startTime` (seconds) is converted to `startTimeMs` (milliseconds) for outline and tracker occurrence fields.
+- CRM fields (`accountName`, `accountIndustry`, `accountWebsite`) are extracted from the nested `context.objects.fields` array via `extractFieldValues`, filtering by `objectType = "Account"`.
+- Retry logic: up to 5 attempts (`MAX_RETRIES`) per request. 429 responses respect the `Retry-After` header; other errors use exponential backoff capped at 30s.
+
+---
+
+### `POST /api/gong/transcripts`
+
+**File:** `src/app/api/gong/transcripts/route.ts`
+
+**Auth:** `X-Gong-Auth` required.
+
+**Request body:**
+```typescript
+{
+  callIds: string[];   // Required. Array of Gong call IDs.
+  baseUrl?: string;    // Default: "https://api.gong.io"
+}
+```
+
+**Success response (200):**
+```typescript
+{
+  transcripts: Array<{
+    callId: string;
+    transcript: Array<{
+      speakerId: string;
+      sentences: Array<{
+        start: number;  // ms from call start
+        end: number;
+        text: string;
+      }>;
+    }>;
+  }>;
+}
+```
+The `transcript` array shape mirrors the Gong `callTranscripts[].transcript` monologue structure from `/v2/calls/transcript`.
+
+**Error responses:**
+
+| Status | Body |
+|--------|------|
+| 400 | `{ "error": "callIds array is required" }` |
+| 401 | `{ "error": "Missing credentials" }` |
+| 401 | `{ "error": "Invalid API credentials" }` |
+| 500 | `{ "error": "Internal server error" }` |
+
+**Notable behavior:**
+- Batch size: 50 call IDs per request to Gong (`TRANSCRIPT_BATCH_SIZE`).
+- Batches are processed sequentially with 350ms delays between each.
+- Monologues for a given `callId` are aggregated across paginated responses — if Gong paginates within a batch, all pages are fetched and merged into `transcriptMap[callId]`.
+- Response is built by iterating `Object.entries(transcriptMap)` and flattening to an array of `{ callId, transcript }`.
+
+---
+
+### `POST /api/analyze/score`
+
+**File:** `src/app/api/analyze/score/route.ts`
+
+**Auth:** None.
+
+**Request body:**
+```typescript
+{
+  question: string;
+  calls: Array<{
+    id: string;
+    title?: string;
+    brief?: string;
+    keyPoints?: string[];
+    outline?: Array<{ name: string }>;
+    trackers?: Array<{ name?: string } | string>;
+    topics?: string[];
+    talkRatio?: number;
+  }>;
+}
+```
+
+**Success response (200):**
+```typescript
+{
+  scores: Array<{
+    callId: string;
+    score: number;             // 0–10, clamped
+    reason: string;            // one-sentence explanation
+    relevantSections: string[];
+  }>;
+}
+```
+
+**Error responses:**
+
+| Status | Body |
+|--------|------|
+| 400 | `{ "error": "question and calls[] are required" }` |
+| 500 | `{ "error": "<message>" }` |
+
+**Notable behavior:**
+- All calls are scored in parallel via `Promise.all`.
+- Uses `cheapCompleteJSON`, `temperature: 0.2`, `maxTokens: 256`.
+- If scoring fails for an individual call, it defaults to `score: 5` (neutral) with a fallback reason rather than failing the whole request. `relevantSections` falls back to all outline section names.
+- Score is clamped to [0, 10] via `Math.max(0, Math.min(10, result.score))`.
+
+---
+
+### `POST /api/analyze/process`
+
+**File:** `src/app/api/analyze/process/route.ts`
+
+**Auth:** None.
+
+**Request body:**
+```typescript
+{
+  question: string;
+  monologues: any[];  // Transcript monologue objects for a single call
+}
+```
+
+**Success response (200):**
+```typescript
+{
+  truncated: Array<{
+    index: number;
+    kept: string;   // Retained excerpt relevant to the question
+  }>;
+}
+```
+
+**Error responses:**
+
+| Status | Body |
+|--------|------|
+| 400 | `{ "error": "question and monologues[] are required" }` |
+| 500 | `{ "error": "<message>" }` |
+
+**Notable behavior:**
+- Builds prompt via `buildSmartTruncationPrompt` from `src/lib/transcript-surgery.ts`. All monologues for a single call are batched into one prompt.
+- Uses `cheapCompleteJSON`, `temperature: 0.2`, `maxTokens: 2048`.
+- Purpose is to reduce transcript volume before passing to the more expensive `analyze/run` step — filters out monologues irrelevant to the research question.
+
+---
+
+### `POST /api/analyze/run`
+
+**File:** `src/app/api/analyze/run/route.ts`
+
+**Auth:** None.
+
+**Request body:**
+```typescript
+{
+  question: string;
+  callData: string;  // Formatted transcript excerpt string from formatExcerptsForAnalysis
+}
+```
+
+**Success response (200):**
+```typescript
+{
+  findings: Array<{
+    exact_quote: string;
+    timestamp: string;
+    context: string;
+    significance: "high" | "medium" | "low";
+    finding_type: "objection" | "need" | "competitive" | "question" | "feedback";
+  }>;
+}
+```
+
+**Error responses:**
+
+| Status | Body |
+|--------|------|
+| 400 | `{ "error": "question and callData required" }` |
+| 500 | `{ "error": "<message>" }` |
+
+**Notable behavior:**
+- This route uses `new Response(...)` rather than `NextResponse.json(...)` for both success and error paths — the only route in the codebase to do so.
+- Uses `smartCompleteJSON` (higher-quality model), `temperature: 0.3`, `maxTokens: 4096`.
+- System prompt instructs the model to use verbatim quotes only — no paraphrasing.
+- Returns `findings: []` when the model finds no relevant evidence in the transcript.
+
+---
+
+### `POST /api/analyze/synthesize`
+
+**File:** `src/app/api/analyze/synthesize/route.ts`
+
+**Auth:** None.
+
+**Request body:**
+```typescript
+{
+  question: string;
+  allFindings: Array<{
+    callId: string;
+    callTitle: string;
+    account: string;
+    findings: Array<{
+      exact_quote: string;
+      finding_type: string;
+      significance: string;
+      context: string;
+    }>;
+  }>;
+}
+```
+
+**Success response (200):**
+```typescript
+{
+  themes: Array<{
+    theme: string;
+    frequency: number;
+    representative_quotes: string[];
+    call_ids: string[];
+  }>;
+  overall_summary: string;
+}
+```
+
+If `allFindings` contains no entries with non-empty `findings` arrays, returns early with:
+```json
+{
+  "themes": [],
+  "overall_summary": "No relevant findings were identified across the analyzed calls."
+}
+```
+
+**Error responses:**
+
+| Status | Body |
+|--------|------|
+| 400 | `{ "error": "question and allFindings[] are required" }` |
+| 500 | `{ "error": "<message>" }` |
+
+**Notable behavior:**
+- Uses `smartCompleteJSON`, `temperature: 0.3`, `maxTokens: 4096`.
+- Input is pre-formatted server-side into a human-readable text block before prompting; the model receives a formatted string, not raw JSON.
+- Designed as the final step of the multi-stage analyze pipeline: score → process → run → synthesize.
+
+---
+
+### `POST /api/analyze/followup`
+
+**File:** `src/app/api/analyze/followup/route.ts`
+
+**Auth:** None.
+
+**Request body:**
+```typescript
+{
+  question?: string;           // Original research question (optional context)
+  followUpQuestion: string;    // Required
+  processedData: string;       // Required — pre-processed transcript text
+  previousFindings?: object;   // Optional — findings from prior analyze/run calls
+}
+```
+
+**Success response (200):**
+```typescript
+{
+  answer: string;
+  supporting_quotes: Array<{
+    quote: string;
+    call: string;
+    timestamp: string;
+  }>;
+  calls_referenced: string[];
+}
+```
+
+**Error responses:**
+
+| Status | Body |
+|--------|------|
+| 400 | `{ "error": "followUpQuestion and processedData are required" }` |
+| 500 | `{ "error": "<message>" }` |
+
+**Notable behavior:**
+- Uses `smartCompleteJSON`, `temperature: 0.3`, `maxTokens: 4096`.
+- `previousFindings` is serialized to JSON and included in the prompt when present, enabling conversational follow-up within a research session.
+- System prompt frames the model as a "sales research assistant" restricted to citing only the provided data.
+
+---
+
+## Middleware
+
+**File:** `src/middleware.ts`
+
+```typescript
+export const config = {
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+};
+```
+
+The middleware runs on all matched paths. Logic:
+
+1. Path starts with `/gate`, `/api/`, or `/_next/` — pass through unconditionally.
+2. Cookie `gw-auth` equals `"1"` — pass through.
+3. Otherwise — redirect to `/gate`.
+
+API routes have no cookie-based protection. The Gong proxy routes enforce credentials via `X-Gong-Auth`. The analyze routes have no authentication of any kind.
+
+---
+
+## AI Provider Routing
+
+The analyze routes use two internal helpers from `src/lib/ai-providers.ts`:
+
+- `cheapCompleteJSON` — used by `score` and `process`. Lower-cost model, fast, small output. Temperature 0.2.
+- `smartCompleteJSON` — used by `run`, `synthesize`, and `followup`. Higher-quality model for nuanced extraction and synthesis. Temperature 0.3.
+
+Neither function is exposed as an HTTP endpoint. They are called server-side within the route handlers.
+
+---
+
+## Request Flow Diagram
 
 ```mermaid
 sequenceDiagram
     participant Browser
     participant Middleware
     participant AuthRoute as POST /api/auth
-    participant GongProxy as POST /api/gong/*
-    participant GongAPI as api.gong.io
+    participant ConnectRoute as POST /api/gong/connect
+    participant CallsRoute as POST /api/gong/calls
+    participant TranscriptsRoute as POST /api/gong/transcripts
+    participant GongAPI as Gong API
+    participant AnalyzeRoutes as POST /api/analyze/*
+    participant AIProvider as AI Provider
 
     Browser->>Middleware: GET /
-    Middleware->>Browser: 302 /gate (no gw-auth cookie)
-    Browser->>AuthRoute: POST /api/auth { password }
-    AuthRoute->>Browser: 200 { ok: true } + Set-Cookie: gw-auth=1
-    Browser->>Middleware: GET / (gw-auth=1)
-    Middleware->>Browser: 200 (pass-through)
-    Browser->>GongProxy: POST /api/gong/connect X-Gong-Auth: base64
-    GongProxy->>GongAPI: GET /v2/users Authorization: Basic base64
-    GongAPI->>GongProxy: 200 { users }
-    GongProxy->>Browser: 200 { users, trackers, workspaces, internalDomains }
+    Middleware->>Middleware: Check gw-auth cookie
+    alt No cookie
+        Middleware->>Browser: 302 redirect to /gate
+        Browser->>AuthRoute: POST /api/auth { password }
+        AuthRoute->>Browser: 200 + Set-Cookie: gw-auth=1
+    end
+
+    Browser->>ConnectRoute: POST /api/gong/connect\nX-Gong-Auth: base64(key:secret)
+    ConnectRoute->>GongAPI: GET /v2/users (paginated)
+    ConnectRoute->>GongAPI: GET /v2/settings/trackers (paginated)
+    ConnectRoute->>GongAPI: GET /v2/workspaces
+    ConnectRoute->>Browser: users, trackers, workspaces, internalDomains
+
+    Browser->>CallsRoute: POST /api/gong/calls\nX-Gong-Auth: ...\nfromDate, toDate
+    CallsRoute->>GongAPI: GET /v2/calls (30-day chunks, paginated)
+    CallsRoute->>GongAPI: POST /v2/calls/extensive (batches of 10)
+    CallsRoute->>Browser: calls: NormalizedCall[]
+
+    Browser->>TranscriptsRoute: POST /api/gong/transcripts\nX-Gong-Auth: ...\ncallIds[]
+    TranscriptsRoute->>GongAPI: POST /v2/calls/transcript (batches of 50)
+    TranscriptsRoute->>Browser: transcripts[]
+
+    Note over Browser,AIProvider: Analyze pipeline (runs after transcripts fetched)
+
+    Browser->>AnalyzeRoutes: POST /api/analyze/score { question, calls[] }
+    AnalyzeRoutes->>AIProvider: cheapCompleteJSON (parallel per call)
+    AnalyzeRoutes->>Browser: scores[]
+
+    Browser->>AnalyzeRoutes: POST /api/analyze/process { question, monologues[] }
+    AnalyzeRoutes->>AIProvider: cheapCompleteJSON
+    AnalyzeRoutes->>Browser: truncated[]
+
+    Browser->>AnalyzeRoutes: POST /api/analyze/run { question, callData }
+    AnalyzeRoutes->>AIProvider: smartCompleteJSON
+    AnalyzeRoutes->>Browser: findings[]
+
+    Browser->>AnalyzeRoutes: POST /api/analyze/synthesize { question, allFindings[] }
+    AnalyzeRoutes->>AIProvider: smartCompleteJSON
+    AnalyzeRoutes->>Browser: themes[], overall_summary
+
+    opt Follow-up questions
+        Browser->>AnalyzeRoutes: POST /api/analyze/followup\nfollowUpQuestion, processedData
+        AnalyzeRoutes->>AIProvider: smartCompleteJSON
+        AnalyzeRoutes->>Browser: answer, supporting_quotes[]
+    end
 ```
-
----
-
-## Per-Route Detail
-
-### POST `/api/auth`
-
-**File:** `src/app/api/auth/route.ts`
-
-**Auth required:** None. This is the endpoint that issues auth.
-
-**Handler:** `POST(request: Request)`
-
-**Request body:**
-
-```typescript
-{ password: string }
-```
-
-**Success response — 200:**
-
-```typescript
-{ ok: true }
-```
-
-Sets cookie: `gw-auth=1; HttpOnly; Max-Age=604800; Path=/; SameSite=Lax`
-
-**Error responses:**
-
-| Status | Body | Condition |
-|--------|------|-----------|
-| 401 | `{ error: "Incorrect password." }` | Password does not match `SITE_PASSWORD` |
-| 500 | `{ error: "Server misconfigured" }` | `SITE_PASSWORD` env var is not set |
-
-**Notable behavior:**
-
-- Malformed JSON bodies are silently coerced to `{}` via `.catch(() => ({}))`, which produces a 401 rather than a parse error.
-- No rate limiting is implemented at the route level.
-- The middleware explicitly passes all `/api/` paths through without the cookie check, so this route is always reachable regardless of auth state.
-
----
-
-### POST `/api/gong/connect`
-
-**File:** `src/app/api/gong/connect/route.ts`
-
-**Auth required:** `X-Gong-Auth` header (Base64 `accessKey:secretKey`).
-
-**Handler:** `POST(request: NextRequest)`
-
-**Request body:**
-
-```typescript
-{
-  baseUrl?: string  // Default: "https://api.gong.io". Trailing slashes stripped.
-}
-```
-
-Empty body `{}` is valid.
-
-**What it does:**
-
-Calls three Gong API endpoints in parallel via `Promise.allSettled`:
-
-1. `GET /v2/users` (paginated) — fetches all workspace users
-2. `GET /v2/settings/trackers` (paginated) — fetches company keyword trackers
-3. `GET /v2/workspaces` — fetches workspace list (single request, not paginated)
-
-From the users list, it extracts all unique email domains into `internalDomains`. The browser uses this array to classify call participants as internal or external speakers.
-
-Pagination is handled by the local `fetchAllPages` helper, which follows `records.cursor` until exhausted, sleeping `GONG_RATE_LIMIT_MS` (350 ms) between pages.
-
-**Success response — 200:**
-
-```typescript
-{
-  users: object[],             // All users in the workspace (Gong /v2/users shape)
-  trackers: object[],          // Company keyword trackers (Gong /v2/settings/trackers shape)
-  workspaces: object[],        // Available workspaces (Gong /v2/workspaces shape)
-  internalDomains: string[],   // Unique email domains derived from users[].emailAddress
-  baseUrl: string,             // Normalized base URL used for this session
-  warnings?: string[]          // Present only if users or trackers fetch failed non-fatally
-}
-```
-
-**Error responses:**
-
-| Status | Body | Condition |
-|--------|------|-----------|
-| 401 | `{ error: "Missing credentials" }` | `X-Gong-Auth` header absent |
-| 401 | `{ error: "Invalid API credentials" }` | Gong returns 401 on `/v2/users` |
-| 4xx/500 | `{ error: "Gong API error (<status>): <message>" }` | Other Gong API errors via `handleGongError` |
-| 500 | `{ error: "Internal server error" }` | Unexpected non-`GongApiError` exception |
-
-**Notable behavior:**
-
-- Uses `Promise.allSettled` so a failed trackers or workspaces fetch does not fail the whole request. A degraded 200 with `warnings` is returned instead.
-- A 401 from Gong on `/v2/users` is treated as a hard failure (credentials invalid). 401s on trackers/workspaces are swallowed into the `warnings` array.
-- The `baseUrl` field in the response is the normalized value actually used (trailing slashes removed), so the browser can store and reuse it exactly.
-
----
-
-### POST `/api/gong/calls`
-
-**File:** `src/app/api/gong/calls/route.ts`
-
-**Auth required:** `X-Gong-Auth` header.
-
-**Handler:** `POST(request: NextRequest)`
-
-**Request body:**
-
-```typescript
-{
-  fromDate: string,       // ISO 8601 datetime e.g. "2024-01-01T00:00:00Z"
-  toDate: string,         // ISO 8601 datetime e.g. "2024-03-01T23:59:59Z"
-  baseUrl?: string,       // Default: "https://api.gong.io"
-  workspaceId?: string    // Optional Gong workspace ID filter
-}
-```
-
-`fromDate` and `toDate` are required. Returns 400 if either is missing.
-
-**What it does:**
-
-Executes a two-step pipeline:
-
-**Step 1** — Paginated `GET /v2/calls?fromDateTime=...&toDateTime=...` to collect all call IDs in the date range. Respects optional `workspaceId` filter. Follows `records.cursor` pagination with 350 ms inter-page delay.
-
-**Step 2** — Batched `POST /v2/calls/extensive` in groups of `EXTENSIVE_BATCH_SIZE` (10). Each batch requests:
-- `exposedFields.parties: true`
-- `exposedFields.content.topics: true`
-- `exposedFields.content.trackers: true`
-- `exposedFields.content.brief: true`
-- `exposedFields.content.keyPoints: true`
-- `exposedFields.content.actionItems: true`
-- `exposedFields.content.outline: true`
-- `exposedFields.content.structure: true`
-- `context: "Extended"` (CRM data)
-
-If Step 2 returns a 403 (insufficient API scope), `extensiveFailed` is set and the route falls back to the basic call data from Step 1 with empty enriched fields.
-
-All calls are normalized to a consistent shape by `normalizeExtensiveCall` before returning. CRM fields (`accountName`, `accountIndustry`, `accountWebsite`) are extracted from the nested `context[].objects[].fields[]` structure by `extractFieldValues`.
-
-**Success response — 200:**
-
-```typescript
-{
-  calls: Array<{
-    id: string,
-    title: string,
-    started: string,              // ISO datetime
-    duration: number,             // seconds
-    url?: string,                 // Gong call recording URL
-    direction?: string,           // "Inbound" | "Outbound" | "Conference" | "Unknown"
-    parties: object[],            // Call participants; empty on 403 fallback
-    topics: string[],             // Gong AI-detected topics; empty on 403 fallback
-    trackers: object[],           // Matched company trackers; empty on 403 fallback
-    brief: string,                // Gong AI summary; empty on 403 fallback
-    keyPoints: string[],
-    actionItems: string[],
-    interactionStats: object | null,
-    context: object[],            // Raw CRM context objects
-    accountName: string,          // Extracted Account.name from context
-    accountIndustry: string,      // Extracted Account.industry from context
-    accountWebsite: string,       // Extracted Account.website from context
-  }>
-}
-```
-
-If no calls exist for the date range, returns `{ calls: [] }` immediately (Step 2 is skipped entirely).
-
-**Error responses:**
-
-| Status | Body | Condition |
-|--------|------|-----------|
-| 400 | `{ error: "fromDate and toDate are required" }` | Missing required body fields |
-| 401 | `{ error: "Missing credentials" }` | `X-Gong-Auth` header absent |
-| 401 | `{ error: "Invalid API credentials" }` | Gong returns 401 |
-| 4xx/500 | `{ error: "Gong API error (<status>): <message>" }` | Other Gong errors via `handleGongError` |
-| 500 | `{ error: "Internal server error" }` | Unexpected exception |
-
-**Notable behavior:**
-
-- Rate limiting: 350 ms (`GONG_RATE_LIMIT_MS`) between every paginated page and between every extensive batch.
-- `EXTENSIVE_BATCH_SIZE = 10` is a hard Gong API limit for `/v2/calls/extensive`.
-- On 403 from extensive, the route logs `console.warn` and returns degraded data rather than an error response. The browser receives a valid `calls` array but with empty enrichment fields.
-- `extractFieldValues` handles both regular `fields[].value` lookups and the special `objectId` field, which lives directly on the object rather than in the fields array.
-
----
-
-### POST `/api/gong/transcripts`
-
-**File:** `src/app/api/gong/transcripts/route.ts`
-
-**Auth required:** `X-Gong-Auth` header.
-
-**Handler:** `POST(request: NextRequest)`
-
-**Request body:**
-
-```typescript
-{
-  callIds: string[],   // Non-empty array of Gong call IDs
-  baseUrl?: string     // Default: "https://api.gong.io"
-}
-```
-
-`callIds` must be a non-empty array. Returns 400 if missing, not an array, or empty.
-
-**What it does:**
-
-Fetches transcript monologues for the given call IDs by calling `POST /v2/calls/transcript` in batches of `TRANSCRIPT_BATCH_SIZE` (50). Each batch may be paginated; `records.cursor` is followed until exhausted.
-
-The request body sent to Gong is:
-```typescript
-{
-  filter: { callIds: string[] },  // up to 50 IDs
-  cursor?: string                  // present only when paginating
-}
-```
-
-Monologues from all pages are accumulated into `transcriptMap: Record<string, any[]>` keyed by `callId`. The final response flattens this into an array of `{ callId, transcript }` objects.
-
-**Success response — 200:**
-
-```typescript
-{
-  transcripts: Array<{
-    callId: string,
-    transcript: object[]  // Array of Gong monologue objects from /v2/calls/transcript
-                          // Each monologue contains speakerId and sentences with text + start time
-  }>
-}
-```
-
-Calls with no transcript data will not appear in the `transcripts` array.
-
-**Error responses:**
-
-| Status | Body | Condition |
-|--------|------|-----------|
-| 400 | `{ error: "callIds array is required" }` | Missing, non-array, or empty `callIds` |
-| 401 | `{ error: "Missing credentials" }` | `X-Gong-Auth` header absent |
-| 401 | `{ error: "Invalid API credentials" }` | Gong returns 401 |
-| 4xx/500 | `{ error: "Gong API error (<status>): <message>" }` | Other Gong errors |
-| 500 | `{ error: "Internal server error" }` | Unexpected exception |
-
-**Notable behavior:**
-
-- Rate limiting: 350 ms between pages within a batch, and 350 ms between batches.
-- `TRANSCRIPT_BATCH_SIZE = 50` is a hard Gong API limit for `/v2/calls/transcript`.
-- Multiple pages of results for the same batch are merged: `transcriptMap[id].push(...monologues)` appends monologues rather than replacing them.
-- Calls absent from `transcriptMap` after all batches are simply omitted from the response rather than included as empty entries.
-
----
-
-## Shared Library: `src/lib/gong-api.ts`
-
-All three Gong proxy routes import from this module.
-
-**`GongApiError`** — extends `Error` with `status: number` and `endpoint: string`. Thrown by `makeGongFetch` when Gong returns a non-2xx response.
-
-**`makeGongFetch(baseUrl, authHeader)`** — factory that returns a `gongFetch(endpoint, options?)` function. Every request automatically sets `Authorization: Basic <authHeader>` and `Content-Type: application/json`. Non-2xx responses throw `GongApiError`.
-
-**`handleGongError(error)`** — converts `GongApiError` and unknown errors into `NextResponse` with appropriate HTTP status. 401 from Gong → 401, other 4xx → passthrough, everything else → 500.
-
-**`sleep(ms)`** — `Promise`-based delay used between rate-limited requests.
-
-**Constants:**
-
-| Name | Value | Purpose |
-|------|-------|---------|
-| `GONG_RATE_LIMIT_MS` | `350` | Milliseconds to sleep between paginated Gong requests |
-| `EXTENSIVE_BATCH_SIZE` | `10` | Max call IDs per `/v2/calls/extensive` request |
-| `TRANSCRIPT_BATCH_SIZE` | `50` | Max call IDs per `/v2/calls/transcript` request |

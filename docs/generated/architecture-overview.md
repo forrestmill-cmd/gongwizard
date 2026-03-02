@@ -2,11 +2,11 @@
 
 ## System Overview
 
-GongWizard is a Next.js 15 web application that acts as a stateless proxy between a user's browser and the Gong REST API. Its purpose is to let Gong customers browse their recorded sales calls, select a subset, fetch transcripts, and export them in formats optimized for LLM consumption (Markdown, XML, JSONL). No data is persisted server-side at any layer — there is no database, no session store, and no server-side credential storage.
+GongWizard is a Next.js 15 web application that acts as a stateless proxy between the user's browser and the Gong API. Its primary function is to let users fetch, filter, and export Gong call transcripts in formats optimized for LLM consumption (Markdown, XML, JSONL, CSV). The app has no database and no server-side session state — Gong API credentials are collected at runtime, encoded as HTTP Basic auth, held in browser `sessionStorage` under the key `gongwizard_session`, and forwarded to Gong on every API proxy request via the custom `X-Gong-Auth` request header.
 
-The application uses a two-layer auth model. A site-level password gate (`/gate`) issues an httpOnly cookie (`gw-auth`) that middleware checks on every page request, restricting access to known users. Once past the gate, users supply their Gong API Access Key and Secret Key on the Connect page (`/`). Those credentials are base64-encoded into an auth header, stored in browser `sessionStorage` under the key `gongwizard_session`, and forwarded with every subsequent API proxy call via the `X-Gong-Auth` request header. Credentials are cleared when the browser tab closes.
+The application is structured around two user flows. The first is the export flow: users connect their Gong credentials on the Connect page (`src/app/page.tsx`), browse and filter calls on the Calls page (`src/app/calls/page.tsx`), then export selected transcripts. All business logic for filtering, speaker classification, transcript formatting, and file generation runs client-side. The second is the AI analysis flow, driven by the `AnalyzePanel` component (`src/components/analyze-panel.tsx`), which orchestrates a multi-step pipeline: score calls for relevance via `/api/analyze/score`, fetch transcripts, perform surgical extraction and smart truncation, extract per-call findings via `/api/analyze/run`, then synthesize cross-call themes via `/api/analyze/synthesize`.
 
-All business logic runs client-side in `src/app/calls/page.tsx`: speaker classification (internal vs. external via email domain matching), transcript grouping into turns, filler word removal, monologue condensing, token estimation, and all three export renderers. The three Next.js API routes (`/api/gong/connect`, `/api/gong/calls`, `/api/gong/transcripts`) are thin proxies that accept Gong credentials via `X-Gong-Auth`, forward requests to the Gong API with HTTP Basic auth, handle pagination, batching, and rate limiting, then return normalized JSON to the browser.
+Access to all pages is gated by a site-level password enforced in Edge middleware (`src/middleware.ts`). The middleware checks for a `gw-auth` httpOnly cookie set by `/api/auth`. Gong API proxy routes bypass the cookie check and instead require the `X-Gong-Auth` header. The AI analysis routes use two AI providers: Gemini 2.0 Flash Lite (cheap tier, via `cheapCompleteJSON`) for scoring and monologue truncation, and GPT-4o (smart tier, via `smartCompleteJSON`) for finding extraction, synthesis, and follow-up answers.
 
 ---
 
@@ -14,46 +14,93 @@ All business logic runs client-side in `src/app/calls/page.tsx`: speaker classif
 
 ```mermaid
 flowchart TD
-    subgraph Browser["Browser (Client-Side)"]
-        A[GatePage\nsrc/app/gate/page.tsx] -->|POST password| B[/api/auth/route.ts]
-        B -->|Set gw-auth cookie| C[ConnectPage\nsrc/app/page.tsx]
-        C -->|POST X-Gong-Auth header| D[/api/gong/connect/route.ts]
-        D -->|users, trackers, workspaces,\ninternalDomains| E[CallsPage\nsrc/app/calls/page.tsx]
-        E -->|POST X-Gong-Auth + date range| F[/api/gong/calls/route.ts]
-        F -->|normalized GongCall array| E
-        E -->|POST X-Gong-Auth + callIds| G[/api/gong/transcripts/route.ts]
-        G -->|transcript monologues| E
-        E -->|buildMarkdown / buildXML / buildJSONL| H[File Download / Clipboard]
+    subgraph Browser
+        Gate["/gate — GatePage"]
+        Connect["/ — ConnectPage"]
+        Calls["/calls — CallsPage"]
+        AP["AnalyzePanel component"]
+        UF["useFilterState hook"]
+        UCE["useCallExport hook"]
+        SS["sessionStorage\ngongwizard_session"]
+        LS["localStorage\ngongwizard_filters"]
     end
 
-    subgraph Middleware["Edge Middleware\nsrc/middleware.ts"]
-        M[Check gw-auth cookie\nRedirect to /gate if missing]
+    subgraph EdgeRuntime
+        MW["src/middleware.ts\ngw-auth cookie check"]
     end
 
-    subgraph GongAPI["Gong REST API\nhttps://api.gong.io"]
-        G1[/v2/users]
-        G2[/v2/settings/trackers]
-        G3[/v2/workspaces]
-        G4[/v2/calls]
-        G5[/v2/calls/extensive]
-        G6[/v2/calls/transcript]
+    subgraph APIRoutes["Next.js API Routes"]
+        AuthRoute["/api/auth"]
+        ConnectRoute["/api/gong/connect"]
+        CallsRoute["/api/gong/calls"]
+        TranscriptsRoute["/api/gong/transcripts"]
+        ScoreRoute["/api/analyze/score"]
+        ProcessRoute["/api/analyze/process"]
+        RunRoute["/api/analyze/run"]
+        SynthRoute["/api/analyze/synthesize"]
+        FollowupRoute["/api/analyze/followup"]
     end
 
-    subgraph Lib["src/lib/"]
-        L1[gong-api.ts\nGongApiError, makeGongFetch,\nhandleGongError, constants]
-        L2[utils.ts\ncn]
+    subgraph LibModules["src/lib/"]
+        GongApi["gong-api.ts\nGongApiError, makeGongFetch"]
+        AIProviders["ai-providers.ts\ncheapCompleteJSON / smartCompleteJSON"]
+        Filters["filters.ts\nfilter predicates"]
+        FormatUtils["format-utils.ts"]
+        TokenUtils["token-utils.ts"]
+        TrackerAlignment["tracker-alignment.ts\nbuildUtterances, alignTrackersToUtterances"]
+        TranscriptSurgery["transcript-surgery.ts\nperformSurgery, formatExcerptsForAnalysis"]
+        TranscriptFormatter["transcript-formatter.ts\nbuildMarkdown / buildXML / buildJSONL / buildCSVSummary"]
     end
 
-    Browser -->|every page request| Middleware
-    D --> G1
-    D --> G2
-    D --> G3
-    F --> G4
-    F --> G5
-    G --> G6
-    D --> L1
-    F --> L1
-    G --> L1
+    subgraph ExternalAPIs["External Services"]
+        GongAPI["Gong API\napi.gong.io"]
+        Gemini["Google Gemini\ngemini-2.0-flash-lite"]
+        GPT4o["OpenAI GPT-4o"]
+    end
+
+    User -->|"1. visit"| MW
+    MW -->|"no gw-auth cookie"| Gate
+    MW -->|"cookie valid"| Connect
+    Gate -->|"POST password"| AuthRoute
+    AuthRoute -->|"set gw-auth cookie"| Gate
+    Connect -->|"POST X-Gong-Auth"| ConnectRoute
+    ConnectRoute -->|"HTTP Basic"| GongAPI
+    ConnectRoute -->|"users, trackers, workspaces, internalDomains"| SS
+    Connect -->|"navigate"| Calls
+
+    Calls --> UF
+    UF <--> LS
+    Calls --> UCE
+    Calls --> AP
+
+    UCE -->|"POST X-Gong-Auth"| TranscriptsRoute
+    TranscriptsRoute --> GongApi
+    GongApi --> GongAPI
+    UCE --> TranscriptFormatter
+
+    Calls -->|"POST X-Gong-Auth"| CallsRoute
+    CallsRoute --> GongApi
+
+    AP -->|"score"| ScoreRoute
+    ScoreRoute --> AIProviders
+    AP -->|"fetch transcripts"| TranscriptsRoute
+    AP --> TrackerAlignment
+    AP --> TranscriptSurgery
+    AP -->|"process monologues"| ProcessRoute
+    ProcessRoute --> AIProviders
+    AP -->|"run"| RunRoute
+    RunRoute --> AIProviders
+    AP -->|"synthesize"| SynthRoute
+    SynthRoute --> AIProviders
+    AP -->|"followup"| FollowupRoute
+    FollowupRoute --> AIProviders
+
+    AIProviders -->|"cheapCompleteJSON"| Gemini
+    AIProviders -->|"smartCompleteJSON"| GPT4o
+
+    TranscriptFormatter --> TokenUtils
+    TranscriptFormatter --> FormatUtils
+    Filters -.-> Calls
 ```
 
 ---
@@ -61,159 +108,219 @@ flowchart TD
 ## Key Components
 
 ### `src/middleware.ts`
-
-Enforces site-level auth on every request at the Next.js Edge layer. Checks for the `gw-auth` cookie (value `"1"`); if absent, redirects to `/gate`. Passes through requests to `/gate`, `/api/`, `/_next/`, and `/favicon` without checking the cookie.
-
-**Key exports:** `middleware` (default), `config` (matcher config).
-**Depends on:** `next/server`.
-**Depended on by:** All page routes implicitly via Next.js middleware config.
+- **Purpose:** Edge middleware that enforces the site-level password gate on every request. Redirects unauthenticated requests to `/gate`; passes through `/api/`, `/_next/`, and `/favicon` paths without a cookie check.
+- **Key exports:** `middleware` function, `config` matcher
+- **Depends on:** nothing (Next.js edge runtime only)
+- **Depended on by:** all page routes
 
 ---
 
 ### `src/app/gate/page.tsx` — `GatePage`
-
-Client component that renders the site password entry form. Submits a POST to `/api/auth` with the entered password. On success, calls `router.push('/')` to redirect to `ConnectPage`.
-
-**Key exports:** `GatePage` (default export).
-**Depends on:** `Button`, `Card`, `CardContent`, `CardHeader`, `CardTitle`, `Input`, `Label` from `src/components/ui/`; `lucide-react` (`Eye`, `EyeOff`, `Loader2`).
+- **Purpose:** Site password entry form. POSTs to `/api/auth`; on success the server sets the `gw-auth` cookie and the page redirects to the Connect page.
+- **Key exports:** default `GatePage`
+- **Depends on:** `Button`, `Card`, `Input`, `Label` (shadcn/ui)
+- **Depended on by:** middleware redirect target
 
 ---
 
 ### `src/app/api/auth/route.ts`
-
-POST handler that validates the submitted password against `process.env.SITE_PASSWORD`. On match, sets an httpOnly `gw-auth` cookie with a 7-day `maxAge` and returns `{ ok: true }`. Returns 401 on mismatch, 500 if `SITE_PASSWORD` is not configured.
-
-**Key exports:** `POST` (named export, Next.js Route Handler).
-**Depends on:** `next/server` (`NextResponse`).
+- **Purpose:** Validates the site password against `process.env.SITE_PASSWORD`. On match, sets an httpOnly `gw-auth` cookie with a 7-day `maxAge`.
+- **Key exports:** `POST` handler
+- **Depends on:** nothing beyond Next.js
+- **Depended on by:** `GatePage`
 
 ---
 
 ### `src/app/page.tsx` — `ConnectPage`
-
-Client component (Step 1 of the user flow). Accepts a Gong Access Key and Secret Key, base64-encodes them into an `authHeader` (`btoa(accessKey + ':' + secretKey)`), and POSTs to `/api/gong/connect` with the result as the `X-Gong-Auth` header. On success, calls `saveSession()` to write the response payload (`users`, `trackers`, `workspaces`, `internalDomains`, `authHeader`, `baseUrl`) to `sessionStorage` under `gongwizard_session`, then navigates to `/calls`.
-
-**Key exports:** `ConnectPage` (default export).
-**Key functions:** `saveSession` (module-scoped, writes to `sessionStorage`).
-**Depends on:** `Button`, `Card`, `CardContent`, `CardHeader`, `CardTitle`, `Input`, `Label` from `src/components/ui/`; `lucide-react`.
+- **Purpose:** Step 1 of the user flow. Collects Gong Access Key and Secret Key, base64-encodes them as an `authHeader`, calls `/api/gong/connect`, and saves the returned session data (`users`, `trackers`, `workspaces`, `internalDomains`, `baseUrl`, `authHeader`) to `sessionStorage` under `gongwizard_session`.
+- **Key exports:** default `ConnectPage`
+- **Depends on:** `Button`, `Card`, `Input`, `Label` (shadcn/ui)
+- **Depended on by:** entry point after auth
 
 ---
 
 ### `src/app/api/gong/connect/route.ts`
-
-POST proxy that initializes a Gong session. Reads `X-Gong-Auth` from request headers. Calls `/v2/users` (paginated), `/v2/settings/trackers` (paginated), and `/v2/workspaces` in parallel via `Promise.allSettled`. Extracts unique email domains from the user list to produce `internalDomains`. Returns all four datasets plus warnings for any failed sub-requests. Contains a local `fetchAllPages` utility that handles cursor-based pagination with `GONG_RATE_LIMIT_MS` delays between pages.
-
-**Key exports:** `POST`.
-**Depends on:** `GongApiError`, `sleep`, `makeGongFetch`, `handleGongError`, `GONG_RATE_LIMIT_MS` from `src/lib/gong-api.ts`.
+- **Purpose:** Proxy that fetches `/v2/users`, `/v2/settings/trackers`, and `/v2/workspaces` from Gong in parallel. Derives `internalDomains` from user email addresses. Handles pagination via cursor loop with 350 ms delays.
+- **Key exports:** `POST` handler
+- **Depends on:** `gong-api.ts` (`makeGongFetch`, `GongApiError`, `sleep`, `GONG_RATE_LIMIT_MS`, `handleGongError`)
+- **Depended on by:** `ConnectPage`
 
 ---
 
 ### `src/app/api/gong/calls/route.ts`
-
-POST proxy that fetches call metadata for a date range. Two-step process:
-
-1. Paginates `GET /v2/calls` to collect all call IDs in the date range (supports optional `workspaceId` filter).
-2. Batches IDs into groups of `EXTENSIVE_BATCH_SIZE` (10) and POSTs each batch to `/v2/calls/extensive` with a `contentSelector` requesting parties, topics, trackers, brief, keyPoints, actionItems, outline, and `Extended` CRM context.
-
-If `/v2/calls/extensive` returns 403 (API scope issue), falls back to basic call data with empty parties/topics/trackers. Normalizes both response shapes to a consistent flat object via `normalizeExtensiveCall`. Contains `extractFieldValues` to navigate Gong's nested `context.objects.fields` structure for CRM account data.
-
-**Key exports:** `POST`.
-**Key functions:** `extractFieldValues`, `normalizeExtensiveCall` (both module-scoped).
-**Depends on:** `GongApiError`, `sleep`, `makeGongFetch`, `handleGongError`, `GONG_RATE_LIMIT_MS`, `EXTENSIVE_BATCH_SIZE` from `src/lib/gong-api.ts`.
+- **Purpose:** Proxy for fetching the call list. Splits date ranges into 30-day chunks, paginates `/v2/calls`, then batch-fetches full metadata via `/v2/calls/extensive` (10 IDs per batch, `EXTENSIVE_BATCH_SIZE`). Falls back to basic call data on 403. Normalizes the Gong response into `GongCall` shape via `normalizeExtensiveCall` and `normalizeOutline`. Extracts CRM context fields (`accountName`, `accountIndustry`, `accountWebsite`) via `extractFieldValues`.
+- **Key exports:** `POST` handler, `normalizeExtensiveCall`, `normalizeOutline`, `extractFieldValues`
+- **Depends on:** `gong-api.ts`
+- **Depended on by:** `CallsPage`
 
 ---
 
 ### `src/app/api/gong/transcripts/route.ts`
-
-POST proxy that fetches transcript monologues for a list of call IDs. Batches IDs into groups of `TRANSCRIPT_BATCH_SIZE` (50) and POSTs each batch to `/v2/calls/transcript`. Accumulates monologues into a `transcriptMap` keyed by `callId`, handles cursor-based pagination within each batch, then returns an array of `{ callId, transcript }` objects.
-
-**Key exports:** `POST`.
-**Depends on:** `sleep`, `makeGongFetch`, `handleGongError`, `GONG_RATE_LIMIT_MS`, `TRANSCRIPT_BATCH_SIZE` from `src/lib/gong-api.ts`.
+- **Purpose:** Proxy for fetching transcript monologues. Accepts an array of `callIds`, batches them into groups of 50 (`TRANSCRIPT_BATCH_SIZE`), and POSTs to `/v2/calls/transcript`. Returns `{ transcripts: [{ callId, transcript }] }`.
+- **Key exports:** `POST` handler
+- **Depends on:** `gong-api.ts`
+- **Depended on by:** `useCallExport`, `AnalyzePanel`
 
 ---
 
 ### `src/app/calls/page.tsx` — `CallsPage`
+- **Purpose:** Main UI page. Fetches the call list from `/api/gong/calls`, applies client-side filters via predicates from `filters.ts`, renders the filtered call table, and hosts the export controls and `AnalyzePanel`. All filtering, speaker classification, and call selection state lives here.
+- **Key exports:** default `CallsPage`
+- **Depends on:** `useFilterState`, `useCallExport`, `AnalyzePanel`, `filters.ts`, `format-utils.ts`, `token-utils.ts`, shadcn/ui components
+- **Depended on by:** top-level user flow
 
-The main application page (Step 2 of the user flow). Contains all client-side business logic. On mount reads `gongwizard_session` from `sessionStorage`; redirects to `/` if absent.
+---
 
-**Call loading.** `loadCalls()` POSTs to `/api/gong/calls` with the date range and optional workspace filter. Processes the response with `isInternalParty` to classify speakers (using `party.affiliation` as primary signal, email domain match as fallback) and extracts active tracker names.
+### `src/hooks/useFilterState.ts`
+- **Purpose:** Manages all filter state for the calls list. Persists range and boolean filters (`excludeInternal`, `durationRange`, `talkRatioRange`, `minExternalSpeakers`) to `localStorage` under `gongwizard_filters`; keeps text search and multi-select filters (trackers, topics) session-only.
+- **Key exports:** `useFilterState`
+- **Depends on:** React, localStorage
+- **Depended on by:** `CallsPage`
 
-**Filtering.** `filteredCalls` (memoized with `useMemo`) applies text search on title and brief, an `excludeInternal` toggle, and per-tracker filters. `trackerCounts` (also memoized) precomputes how many loaded calls match each tracker.
+---
 
-**Transcript fetch.** `fetchTranscriptsForSelected()` POSTs to `/api/gong/transcripts`, then builds a `speakerMap` from stored party data, flattens all `TranscriptSentence` objects from monologue tracks into chronological order, and calls `groupTranscriptTurns` to merge consecutive same-speaker sentences into `FormattedTurn` objects.
+### `src/hooks/useCallExport.ts`
+- **Purpose:** Encapsulates the export logic. Fetches transcripts for selected calls, builds `CallForExport` objects (resolving speakers via `isInternalParty`), groups sentences into turns via `groupTranscriptTurns`, then calls `buildExportContent` and triggers a file download or clipboard copy. Also supports ZIP export (one file per call plus a `manifest.json`) via `client-zip`.
+- **Key exports:** `useCallExport`
+- **Depends on:** `transcript-formatter.ts`, `format-utils.ts`, `/api/gong/transcripts`, `client-zip`, `date-fns`
+- **Depended on by:** `CallsPage`
 
-**Export.** `buildExportContent` dispatches to `buildMarkdown`, `buildXML`, or `buildJSONL` based on selected format. Each renderer optionally applies `filterFillerTurns` (removes short social filler via `FILLER_PATTERNS`) and `condenseInternalMonologues` (merges runs of 3+ consecutive turns by the same internal speaker) per `ExportOptions`.
+---
 
-**Token estimation.** `estimateTokens` (~4 chars/token heuristic), `contextLabel`, and `contextColor` display a live context-window fit indicator against common LLM context sizes.
-
-**Key types:** `GongCall`, `ExportOptions`, `Speaker`, `TranscriptSentence`, `FormattedTurn`, `CallForExport`.
-
-**Key functions:** `buildMarkdown`, `buildXML`, `buildJSONL`, `buildExportContent`, `buildCallText`, `groupTranscriptTurns`, `filterFillerTurns`, `condenseInternalMonologues`, `isInternalParty`, `estimateTokens`, `contextLabel`, `contextColor`, `formatDuration`, `formatTimestamp`, `escapeXml`, `downloadFile`, `getSession`, `saveSession`.
-
-**Depends on:** `Badge`, `Button`, `Card`, `CardContent`, `CardHeader`, `CardTitle`, `Checkbox`, `Input`, `Label`, `Separator`, `Tabs`, `TabsList`, `TabsTrigger` from `src/components/ui/`; `date-fns` (`format`, `subDays`); `lucide-react`.
+### `src/components/analyze-panel.tsx` — `AnalyzePanel`
+- **Purpose:** Self-contained AI research panel. Manages a four-stage state machine (`idle → scoring → scored → analyzing → results`). Orchestrates the full analysis pipeline: score calls for relevance, fetch transcripts, build utterances, align trackers, perform surgical extraction, optionally truncate long internal monologues, run per-call finding extraction, synthesize cross-call themes, and support follow-up questions (up to 10). Exports findings as JSON or CSV.
+- **Key exports:** default `AnalyzePanel`
+- **Internal types:** `ScoredCall`, `Finding`, `CallFindings`, `Theme`, `FollowUpAnswer`, `Stage`
+- **Depends on:** `tracker-alignment.ts`, `transcript-surgery.ts`, `format-utils.ts`, all `/api/analyze/*` routes, `/api/gong/transcripts`, shadcn/ui
+- **Depended on by:** `CallsPage`
 
 ---
 
 ### `src/lib/gong-api.ts`
+- **Purpose:** Shared Gong API utilities. `makeGongFetch` returns a fetch wrapper that injects `Authorization: Basic <authHeader>`, retries up to 5 times with exponential backoff, handles 429 rate limits via `Retry-After`, and throws `GongApiError` immediately on 401/403. `handleGongError` maps errors to `NextResponse`.
+- **Key exports:** `GongApiError`, `makeGongFetch`, `handleGongError`, `sleep`, `GONG_RATE_LIMIT_MS` (350), `EXTENSIVE_BATCH_SIZE` (10), `TRANSCRIPT_BATCH_SIZE` (50), `MAX_RETRIES` (5)
+- **Depends on:** Next.js server runtime
+- **Depended on by:** all three `/api/gong/*` proxy routes
 
-Shared utilities used by all three Gong proxy routes. Centralizes authenticated fetch construction, error handling, and API constants.
+---
 
-**Key exports:**
-- `GongApiError` — Error subclass carrying `status` (HTTP status code) and `endpoint` string fields.
-- `makeGongFetch(baseUrl, authHeader)` — Returns a `gongFetch` closure that injects `Authorization: Basic <authHeader>` and `Content-Type: application/json` on every request; throws `GongApiError` on non-2xx responses.
-- `handleGongError(error)` — Converts a `GongApiError` or unknown error into an appropriate `NextResponse` JSON error. Maps 401 to `{ error: 'Invalid API credentials' }`, propagates 4xx status codes, falls back to 500.
-- `sleep(ms)` — Promise-based delay.
-- `GONG_RATE_LIMIT_MS = 350` — Inter-request delay (Gong enforces ~3 req/s).
-- `EXTENSIVE_BATCH_SIZE = 10` — Max IDs per `/v2/calls/extensive` POST.
-- `TRANSCRIPT_BATCH_SIZE = 50` — Max IDs per `/v2/calls/transcript` POST.
+### `src/lib/ai-providers.ts`
+- **Purpose:** Two-tier AI abstraction. Cheap tier: `cheapComplete` / `cheapCompleteJSON` calls `gemini-2.0-flash-lite` via `@google/genai` with `responseMimeType: 'application/json'`. Smart tier: `smartComplete` / `smartCompleteJSON` / `smartStream` calls `gpt-4o` via `openai` SDK with `response_format: { type: 'json_object' }`. Also exports `estimateInputTokens`, `TOKEN_BUDGET` (250,000), and `checkBudget`.
+- **Key exports:** `cheapComplete`, `cheapCompleteJSON`, `smartComplete`, `smartCompleteJSON`, `smartStream`, `estimateInputTokens`, `TOKEN_BUDGET`, `checkBudget`
+- **Depends on:** `@google/genai`, `openai`, `GEMINI_API_KEY` and `OPENAI_API_KEY` env vars
+- **Depended on by:** all four `/api/analyze/*` routes
 
-**Depends on:** `next/server` (`NextResponse`).
-**Depended on by:** `src/app/api/gong/connect/route.ts`, `src/app/api/gong/calls/route.ts`, `src/app/api/gong/transcripts/route.ts`.
+---
+
+### `src/lib/tracker-alignment.ts`
+- **Purpose:** Aligns Gong tracker keyword occurrences to transcript utterances using a timestamp-based algorithm ported from GongWizard V2. Steps: (1) exact containment, (2) ±3 second fallback window (`WINDOW_MS = 3000`), (3) speaker preference, (4) closest midpoint. Mutates `Utterance` objects in place via `.trackers` array.
+- **Key exports:** `buildUtterances`, `alignTrackersToUtterances`, `extractTrackerOccurrences`, types `Utterance` and `TrackerOccurrence`
+- **Depends on:** nothing
+- **Depended on by:** `AnalyzePanel`
+
+---
+
+### `src/lib/transcript-surgery.ts`
+- **Purpose:** Surgical extraction of relevant transcript segments, reducing ~16K tokens per call to ~2–3K. `performSurgery` filters utterances by: relevance to scored outline sections (via `buildChapterWindows`), tracker matches, filler detection, greeting/closing detection, and minimum word count (8 words). Enriches external utterances with up to 2 preceding turns of context. Flags internal monologues over 60 words for smart truncation. `formatExcerptsForAnalysis` serializes excerpts into the text block consumed by `/api/analyze/run`.
+- **Key exports:** `performSurgery`, `buildChapterWindows`, `formatExcerptsForAnalysis`, `buildSmartTruncationPrompt`, types `SurgicalExcerpt`, `SurgeryResult`, `OutlineSection`
+- **Depends on:** `tracker-alignment.ts` (type `Utterance`)
+- **Depended on by:** `AnalyzePanel`, `/api/analyze/process`
+
+---
+
+### `src/lib/transcript-formatter.ts`
+- **Purpose:** Converts `CallForExport` objects into the four export formats. `groupTranscriptTurns` merges consecutive sentences by the same speaker into turns. `filterFillerTurns` strips short acknowledgment turns. `condenseInternalMonologues` merges consecutive same-speaker internal turns when there are more than two in a row. `buildExportContent` dispatches to `buildMarkdown`, `buildXML`, `buildJSONL`, or `buildCSVSummary`.
+- **Key exports:** `groupTranscriptTurns`, `filterFillerTurns`, `condenseInternalMonologues`, `buildMarkdown`, `buildXML`, `buildJSONL`, `buildCSVSummary`, `buildExportContent`, types `Speaker`, `FormattedTurn`, `CallForExport`, `ExportOptions`, `TranscriptSentence`
+- **Depends on:** `token-utils.ts`, `format-utils.ts`
+- **Depended on by:** `useCallExport`
+
+---
+
+### `src/lib/filters.ts`
+- **Purpose:** Pure filter predicate functions applied client-side in `CallsPage`. Each accepts a `FilterableCall` and relevant parameters and returns a boolean. Also includes `computeTrackerCounts` and `computeTopicCounts` for sidebar facet counts.
+- **Key exports:** `matchesTextSearch`, `matchesTrackers`, `matchesTopics`, `matchesDurationRange`, `matchesTalkRatioRange`, `matchesParticipantName`, `matchesMinExternalSpeakers`, `matchesAiContentSearch`, `computeTrackerCounts`, `computeTopicCounts`
+- **Depends on:** nothing
+- **Depended on by:** `CallsPage`
+
+---
+
+### `src/lib/format-utils.ts`
+- **Purpose:** Shared formatting helpers used across components and lib modules.
+- **Key exports:** `formatDuration` (seconds to human string), `isInternalParty` (email domain-based speaker classification), `downloadFile` (Blob download trigger), `formatTimestamp` (milliseconds to `M:SS`), `truncateToFirstSentence`
+- **Depends on:** nothing
+- **Depended on by:** `transcript-formatter.ts`, `useCallExport`, `AnalyzePanel`, `CallsPage`
+
+---
+
+### `src/lib/token-utils.ts`
+- **Purpose:** Token estimation helpers for the UI's context window indicator. `estimateTokens` uses a 4-chars-per-token heuristic. `contextLabel` and `contextColor` map token counts to human-readable context window labels and Tailwind CSS color classes.
+- **Key exports:** `estimateTokens`, `contextLabel`, `contextColor`
+- **Depends on:** nothing
+- **Depended on by:** `transcript-formatter.ts`, `CallsPage`
 
 ---
 
 ### `src/lib/utils.ts`
-
-Single utility `cn` that merges Tailwind class strings using `clsx` and `tailwind-merge`.
-
-**Key exports:** `cn`.
-**Depended on by:** All 15 `src/components/ui/` components.
-
----
-
-### `src/components/ui/` (15 components)
-
-shadcn/ui component primitives. All are styled wrappers over Radix UI primitives (via `radix-ui` package) or `cmdk`, using Tailwind classes and `class-variance-authority` for variant handling. No application-specific logic.
-
-| File | Primitive / Library | Key exports |
-|---|---|---|
-| `badge.tsx` | `radix-ui` Slot | `Badge`, `badgeVariants` |
-| `button.tsx` | `radix-ui` Slot | `Button`, `buttonVariants` |
-| `calendar.tsx` | `react-day-picker` DayPicker | `Calendar`, `CalendarDayButton` |
-| `card.tsx` | HTML `div` | `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter` |
-| `checkbox.tsx` | `radix-ui` Checkbox | `Checkbox` |
-| `command.tsx` | `cmdk` Command | `Command`, `CommandDialog`, `CommandInput`, `CommandList`, `CommandEmpty`, `CommandGroup`, `CommandItem`, `CommandShortcut`, `CommandSeparator` |
-| `dialog.tsx` | `radix-ui` Dialog | `Dialog`, `DialogClose`, `DialogContent`, `DialogDescription`, `DialogFooter`, `DialogHeader`, `DialogOverlay`, `DialogPortal`, `DialogTitle`, `DialogTrigger` |
-| `input.tsx` | HTML `input` | `Input` |
-| `label.tsx` | `radix-ui` Label | `Label` |
-| `popover.tsx` | `radix-ui` Popover | `Popover`, `PopoverTrigger`, `PopoverContent`, `PopoverAnchor`, `PopoverHeader`, `PopoverTitle`, `PopoverDescription` |
-| `scroll-area.tsx` | `radix-ui` ScrollArea | `ScrollArea`, `ScrollBar` |
-| `separator.tsx` | `radix-ui` Separator | `Separator` |
-| `tabs.tsx` | `radix-ui` Tabs | `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`, `tabsListVariants` |
-| `toggle.tsx` | `radix-ui` Toggle | `Toggle`, `toggleVariants` |
-| `toggle-group.tsx` | `radix-ui` ToggleGroup | `ToggleGroup`, `ToggleGroupItem` |
-| `tooltip.tsx` | `radix-ui` Tooltip | `Tooltip`, `TooltipTrigger`, `TooltipContent`, `TooltipProvider` |
-
-**Depends on:** `src/lib/utils.ts` (`cn`), `class-variance-authority`, `radix-ui`, `cmdk`, `lucide-react`, `react-day-picker`.
-**Internal cross-dependencies:** `command.tsx` imports `dialog.tsx`; `toggle-group.tsx` imports `toggle.tsx`; `calendar.tsx` imports `button.tsx`.
+- **Purpose:** Single utility: `cn`, which combines `clsx` and `tailwind-merge` for conditional Tailwind class composition.
+- **Key exports:** `cn`
+- **Depends on:** `clsx`, `tailwind-merge`
+- **Depended on by:** all shadcn/ui components
 
 ---
 
-### `src/app/layout.tsx` — `RootLayout`
+### `src/types/gong.ts`
+- **Purpose:** Canonical TypeScript type definitions shared across API routes, components, and utilities.
+- **Key exports:** `GongCall`, `GongParty`, `GongTracker`, `TrackerOccurrence`, `OutlineSection`, `OutlineItem`, `GongQuestion`, `InteractionStats`, `GongSession`, `GongUser`, `SessionTracker`, `GongWorkspace`, `TranscriptMonologue`, `TranscriptSentence`, `ScoredCall`, `AnalysisFinding`, `SynthesisTheme`
+- **Depends on:** nothing
+- **Depended on by:** all routes and lib modules that work with Gong data
 
-Root Next.js layout. Loads Geist Sans and Geist Mono via `next/font/google`, applies font CSS variables to `<body>`, and exports the `metadata` object that sets `<title>` and `<meta name="description">` for the entire app.
+---
 
-**Key exports:** `RootLayout` (default), `metadata`.
-**Depends on:** `next/font/google`.
+### `src/components/ui/` — shadcn/ui Primitives
+- **Purpose:** 17 pre-built accessible UI components wrapping Radix UI primitives, used across all pages and `AnalyzePanel`.
+- **Files:** `badge.tsx`, `button.tsx`, `calendar.tsx`, `card.tsx`, `checkbox.tsx`, `command.tsx`, `dialog.tsx`, `input.tsx`, `label.tsx`, `popover.tsx`, `scroll-area.tsx`, `separator.tsx`, `slider.tsx`, `tabs.tsx`, `toggle-group.tsx`, `toggle.tsx`, `tooltip.tsx`
+- **Key exports:** `Badge`, `Button`, `Calendar`/`CalendarDayButton`, `Card`/`CardContent`/`CardHeader`/`CardTitle`/`CardDescription`/`CardFooter`/`CardAction`, `Checkbox`, `Command`/`CommandDialog`/`CommandInput`, `Input`, `Label`, `ScrollArea`, `Separator`, `Slider`, `Tabs`/`TabsList`/`TabsTrigger`/`TabsContent`, `Toggle`/`toggleVariants`, `ToggleGroup`/`ToggleGroupItem`, `Tooltip`/`TooltipContent`/`TooltipProvider`/`TooltipTrigger`
+- **Depends on:** `radix-ui`, `cmdk`, `react-day-picker`, `class-variance-authority`, `lib/utils.ts`
+
+---
+
+### `/api/analyze/score/route.ts`
+- **Purpose:** Scores each call 0–10 for relevance to a research question using call metadata only (title, brief, key points, outline, trackers, topics, talk ratio). Runs all calls in parallel with `cheapCompleteJSON` (Gemini Flash Lite). Returns `{ scores: [{ callId, score, reason, relevantSections }] }`.
+- **Key exports:** `POST` handler
+- **Depends on:** `ai-providers.ts`
+- **Depended on by:** `AnalyzePanel`
+
+---
+
+### `/api/analyze/process/route.ts`
+- **Purpose:** Smart truncation of long internal monologues. Accepts an array of `{ index, text }` segments and uses `buildSmartTruncationPrompt` + `cheapCompleteJSON` (Gemini Flash Lite) to keep only sentences relevant to the research question.
+- **Key exports:** `POST` handler
+- **Depends on:** `ai-providers.ts`, `transcript-surgery.ts`
+- **Depended on by:** `AnalyzePanel`
+
+---
+
+### `/api/analyze/run/route.ts`
+- **Purpose:** Per-call finding extraction. Receives a formatted excerpt string (from `formatExcerptsForAnalysis`) and research question; uses `smartCompleteJSON` (GPT-4o) to extract verbatim quotes with timestamp, context, significance (`high`/`medium`/`low`), and finding type (`objection`/`need`/`competitive`/`question`/`feedback`).
+- **Key exports:** `POST` handler
+- **Depends on:** `ai-providers.ts`
+- **Depended on by:** `AnalyzePanel`
+
+---
+
+### `/api/analyze/synthesize/route.ts`
+- **Purpose:** Cross-call theme synthesis. Accepts all per-call findings and uses `smartCompleteJSON` (GPT-4o) to identify recurring themes with representative quotes, call IDs, and an `overall_summary`.
+- **Key exports:** `POST` handler
+- **Depends on:** `ai-providers.ts`
+- **Depended on by:** `AnalyzePanel`
+
+---
+
+### `/api/analyze/followup/route.ts`
+- **Purpose:** Follow-up question answering against the cached processed excerpt data from a completed analysis session. Uses `smartCompleteJSON` (GPT-4o) to answer with direct quotes and call references.
+- **Key exports:** `POST` handler
+- **Depends on:** `ai-providers.ts`
+- **Depended on by:** `AnalyzePanel`
 
 ---
 
@@ -221,23 +328,24 @@ Root Next.js layout. Loads Geist Sans and Geist Mono via `next/font/google`, app
 
 | Category | Technology | Version | Purpose |
 |---|---|---|---|
-| Framework | Next.js | 16.1.6 | App Router, API routes, Edge middleware |
-| Language | TypeScript | ^5 | Static typing across all source files |
+| Framework | Next.js | 15 (package: `16.1.6`) | App Router, API routes, Edge middleware |
+| Language | TypeScript | ^5 | Strict mode throughout |
 | UI Runtime | React | 19.2.3 | Client components, hooks |
-| UI Runtime | React DOM | 19.2.3 | DOM rendering |
 | Styling | Tailwind CSS | ^4 | Utility-first CSS |
-| Styling | tw-animate-css | ^1.4.0 | Tailwind-compatible animation utilities |
-| Styling | @tailwindcss/postcss | ^4 | PostCSS integration for Tailwind v4 |
-| Component Library | shadcn (CLI) | ^3.8.5 | Component scaffolding (devDependency only) |
-| Component Primitives | radix-ui | ^1.4.3 | Accessible headless UI primitives |
+| Styling | tw-animate-css | ^1.4.0 | Animation utilities |
+| Component Library | shadcn/ui | — | Pre-built accessible components |
+| Component Primitives | radix-ui | ^1.4.3 | Headless UI primitives (Checkbox, Toggle, Tooltip, etc.) |
 | Component Primitives | cmdk | ^1.1.1 | Command palette primitive |
-| Component Primitives | react-day-picker | ^9.14.0 | Calendar / date picker primitive |
-| Icons | lucide-react | ^0.575.0 | SVG icon set |
-| Styling Utilities | class-variance-authority | ^0.7.1 | Component variant definitions |
-| Styling Utilities | clsx | ^2.1.1 | Conditional class merging |
+| Component Primitives | react-day-picker | ^9.14.0 | Calendar/date picker |
+| Icons | lucide-react | ^0.575.0 | Icon set |
+| Styling Utilities | class-variance-authority | ^0.7.1 | Component variant styles |
+| Styling Utilities | clsx | ^2.1.1 | Conditional class names |
 | Styling Utilities | tailwind-merge | ^3.5.0 | Tailwind class deduplication |
-| Date Utilities | date-fns | ^4.1.0 | Date formatting and arithmetic in `CallsPage` |
-| Testing | @playwright/test | ^1.58.2 | End-to-end browser testing |
+| Date Utilities | date-fns | ^4.1.0 | Date formatting in exports |
+| AI (cheap tier) | Google Gemini (`@google/genai`) | — | `gemini-2.0-flash-lite` — scoring and monologue truncation |
+| AI (smart tier) | OpenAI (`openai`) | — | `gpt-4o` — finding extraction, synthesis, follow-ups |
+| ZIP Export | client-zip | — | Client-side ZIP file generation |
+| Testing | @playwright/test | ^1.58.2 | End-to-end tests |
 | Linting | ESLint | ^9 | Code quality |
-| Linting | eslint-config-next | 16.1.6 | Next.js ESLint rule set |
-| Deployment | Vercel | — | Hosting and CI/CD |
+| Deployment | Vercel | — | Hosting and edge runtime |
+| Build Tool | Turbopack | (built into Next.js 15) | Dev server bundler |
