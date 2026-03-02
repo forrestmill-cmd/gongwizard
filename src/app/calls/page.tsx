@@ -9,7 +9,6 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Separator } from '@/components/ui/separator';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Loader2,
@@ -195,7 +194,7 @@ function buildCallText(call: CallForExport, opts: ExportOptions): string {
     const stats = call.interactionStats;
     if (stats.talkRatio != null) out += `- Talk Ratio: ${Math.round(stats.talkRatio * 100)}%\n`;
     if (stats.interactivity != null) out += `- Interactivity: ${(stats.interactivity).toFixed(2)}\n`;
-    if (stats.longestMonologue != null) out += `- Longest Monologue: ${formatDuration(Math.round(stats.longestMonologue))}s\n`;
+    if (stats.longestMonologue != null) out += `- Longest Monologue: ${formatDuration(Math.round(stats.longestMonologue))}\n`;
     if (stats.patience != null) out += `- Patience: ${(stats.patience).toFixed(2)}\n`;
     if (stats.questionRate != null) out += `- Question Rate: ${(stats.questionRate).toFixed(2)}\n`;
     out += '\n';
@@ -535,8 +534,8 @@ export default function CallsPage() {
 
       setCalls(processed);
       setHasLoaded(true);
-    } catch {
-      setLoadError('Network error loading calls.');
+    } catch (err: unknown) {
+      setLoadError(err instanceof Error ? err.message : 'Network error loading calls.');
     } finally {
       setLoading(false);
     }
@@ -589,8 +588,10 @@ export default function CallsPage() {
     const internalDomains: string[] = session.internalDomains || [];
     const callMap = new Map(calls.map((c) => [c.id, c]));
 
-    return (data.transcripts || []).map((t: any) => {
-      const callMeta = callMap.get(t.callId) || ({} as any);
+    return (data.transcripts || [])
+      .filter((t: any) => callMap.has(t.callId))
+      .map((t: any) => {
+      const callMeta = callMap.get(t.callId)!;
       // Transcript endpoint doesn't return parties — use stored call data
       const parties: any[] = callMeta.parties || [];
 

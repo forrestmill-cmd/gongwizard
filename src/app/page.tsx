@@ -45,7 +45,6 @@ export default function ConnectPage() {
 
       if (!res.ok) {
         setError(data.error || 'Failed to connect to Gong. Check your credentials.');
-        setLoading(false);
         return;
       }
 
@@ -53,6 +52,7 @@ export default function ConnectPage() {
       router.push('/calls');
     } catch {
       setError('Network error. Please check your connection and try again.');
+    } finally {
       setLoading(false);
     }
   }
