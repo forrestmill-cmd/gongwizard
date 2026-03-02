@@ -76,6 +76,13 @@ function formatDuration(seconds: number): string {
   return `${s}s`;
 }
 
+function isInternalParty(party: any, internalDomains: string[]): boolean {
+  if (party.affiliation === 'Internal') return true;
+  const email: string = party.emailAddress || '';
+  const domain = email.includes('@') ? email.split('@')[1]?.toLowerCase() : '';
+  return !!(domain && internalDomains.includes(domain));
+}
+
 // ─── Transcript formatting ──────────────────────────────────────────────────
 
 interface Speaker {
@@ -114,23 +121,8 @@ function groupTranscriptTurns(
   const turns: FormattedTurn[] = [];
   let current: { speakerId: string; sentences: TranscriptSentence[] } | null = null;
 
-  for (const sentence of sentences) {
-    if (!current || current.speakerId !== sentence.speakerId) {
-      if (current) {
-        const spk = speakerMap.get(current.speakerId);
-        const firstName = spk?.firstName || spk?.name?.split(' ')[0] || 'Unknown';
-        const isInternal = spk?.isInternal ?? true;
-        const ts = formatTimestamp(current.sentences[0].start);
-        const text = current.sentences.map((s) => s.text).join(' ');
-        turns.push({ speakerId: current.speakerId, firstName, isInternal, timestamp: ts, text });
-      }
-      current = { speakerId: sentence.speakerId, sentences: [sentence] };
-    } else {
-      current.sentences.push(sentence);
-    }
-  }
-
-  if (current) {
+  function flushGroup() {
+    if (!current) return;
     const spk = speakerMap.get(current.speakerId);
     const firstName = spk?.firstName || spk?.name?.split(' ')[0] || 'Unknown';
     const isInternal = spk?.isInternal ?? true;
@@ -138,6 +130,16 @@ function groupTranscriptTurns(
     const text = current.sentences.map((s) => s.text).join(' ');
     turns.push({ speakerId: current.speakerId, firstName, isInternal, timestamp: ts, text });
   }
+
+  for (const sentence of sentences) {
+    if (!current || current.speakerId !== sentence.speakerId) {
+      flushGroup();
+      current = { speakerId: sentence.speakerId, sentences: [sentence] };
+    } else {
+      current.sentences.push(sentence);
+    }
+  }
+  flushGroup();
 
   return turns;
 }
@@ -301,6 +303,20 @@ function buildJSONL(calls: CallForExport[], opts: ExportOptions): string {
       return JSON.stringify(obj);
     })
     .join('\n');
+}
+
+function buildExportContent(
+  calls: CallForExport[],
+  format: 'markdown' | 'xml' | 'jsonl',
+  opts: ExportOptions
+): { content: string; extension: string; mimeType: string } {
+  if (format === 'markdown') {
+    return { content: buildMarkdown(calls, opts), extension: 'md', mimeType: 'text/markdown' };
+  } else if (format === 'xml') {
+    return { content: buildXML(calls, opts), extension: 'xml', mimeType: 'application/xml' };
+  } else {
+    return { content: buildJSONL(calls, opts), extension: 'jsonl', mimeType: 'application/jsonl' };
+  }
 }
 
 function escapeXml(str: string): string {
@@ -499,11 +515,7 @@ export default function CallsPage() {
         let internalCount = 0;
         let externalCount = 0;
         for (const p of parties) {
-          const email: string = p.emailAddress || '';
-          const domain = email.includes('@') ? email.split('@')[1]?.toLowerCase() : '';
-          const isInternal: boolean =
-            p.affiliation === 'Internal' ||
-            !!(domain && internalDomains.includes(domain));
+          const isInternal = isInternalParty(p, internalDomains);
           if (isInternal) internalCount++;
           else externalCount++;
         }
@@ -597,11 +609,7 @@ export default function CallsPage() {
 
       const speakerMap = new Map<string, Speaker>();
       for (const p of parties) {
-        const email: string = p.emailAddress || '';
-        const domain = email.includes('@') ? email.split('@')[1]?.toLowerCase() : '';
-        const isInternal: boolean =
-          p.affiliation === 'Internal' ||
-          !!(domain && internalDomains.includes(domain));
+        const isInternal = isInternalParty(p, internalDomains);
         const fullName = p.name || [p.firstName, p.lastName].filter(Boolean).join(' ') || 'Unknown';
         speakerMap.set(p.speakerId || p.userId || p.id, {
           speakerId: p.speakerId || p.userId || p.id,
@@ -646,25 +654,8 @@ export default function CallsPage() {
     setExporting(true);
     try {
       const callsForExport = await fetchTranscriptsForSelected();
-      let content: string;
-      let filename: string;
-      let mime: string;
-
-      if (exportFormat === 'markdown') {
-        content = buildMarkdown(callsForExport, exportOpts);
-        filename = `gong-transcripts-${format(new Date(), 'yyyy-MM-dd')}.md`;
-        mime = 'text/markdown';
-      } else if (exportFormat === 'xml') {
-        content = buildXML(callsForExport, exportOpts);
-        filename = `gong-transcripts-${format(new Date(), 'yyyy-MM-dd')}.xml`;
-        mime = 'application/xml';
-      } else {
-        content = buildJSONL(callsForExport, exportOpts);
-        filename = `gong-transcripts-${format(new Date(), 'yyyy-MM-dd')}.jsonl`;
-        mime = 'application/jsonl';
-      }
-
-      downloadFile(content, filename, mime);
+      const { content, extension, mimeType } = buildExportContent(callsForExport, exportFormat, exportOpts);
+      downloadFile(content, `gong-transcripts-${format(new Date(), 'yyyy-MM-dd')}.${extension}`, mimeType);
     } catch (err: any) {
       alert(err.message || 'Export failed');
     } finally {
@@ -677,11 +668,7 @@ export default function CallsPage() {
     setExporting(true);
     try {
       const callsForExport = await fetchTranscriptsForSelected();
-      let content: string;
-      if (exportFormat === 'markdown') content = buildMarkdown(callsForExport, exportOpts);
-      else if (exportFormat === 'xml') content = buildXML(callsForExport, exportOpts);
-      else content = buildJSONL(callsForExport, exportOpts);
-
+      const { content } = buildExportContent(callsForExport, exportFormat, exportOpts);
       await navigator.clipboard.writeText(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -694,10 +681,10 @@ export default function CallsPage() {
 
   const tokenEstimate = useMemo(() => {
     // Rough estimate: ~4-8K tokens per 30min call. Use duration as proxy.
-    // Average speaking rate ~150 words/min, ~1.3 tokens/word
+    // Average speaking rate ~130 words/min (below the ~150 avg to account for pauses), ~1.3 tokens/word
     return selectedCalls.reduce((sum, c) => {
       const minutes = c.duration / 60;
-      const estimatedWords = minutes * 130; // slightly below avg to account for pauses
+      const estimatedWords = minutes * 130;
       return sum + Math.ceil(estimatedWords * 1.3);
     }, 0);
   }, [selectedCalls]);

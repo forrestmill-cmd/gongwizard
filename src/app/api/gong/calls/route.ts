@@ -35,6 +35,28 @@ function extractFieldValues(
   return values;
 }
 
+function normalizeExtensiveCall(c: any): Record<string, any> {
+  return {
+    id: c.metaData?.id || c.id,
+    title: c.metaData?.title || c.title || 'Untitled Call',
+    started: c.metaData?.started || c.started,
+    duration: c.metaData?.duration || c.duration || 0,
+    url: c.metaData?.url,
+    direction: c.metaData?.direction,
+    parties: c.parties || [],
+    topics: (c.content?.topics || []).map((t: any) => t.name || t),
+    trackers: c.content?.trackers || [],
+    brief: c.content?.brief || '',
+    keyPoints: (c.content?.keyPoints || []).map((kp: any) => kp.text || kp),
+    actionItems: (c.content?.actionItems || []).map((ai: any) => ai.snippet || ai),
+    interactionStats: c.interaction || null,
+    context: c.context || [],
+    accountName: extractFieldValues(c.context, 'name', 'Account')[0] || '',
+    accountIndustry: extractFieldValues(c.context, 'industry', 'Account')[0] || '',
+    accountWebsite: extractFieldValues(c.context, 'website', 'Account')[0] || '',
+  };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const authHeader = request.headers.get('X-Gong-Auth');
@@ -154,25 +176,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ calls: normalized });
     }
 
-    const normalized = extensiveCalls.map((c: any) => ({
-      id: c.metaData?.id || c.id,
-      title: c.metaData?.title || c.title || 'Untitled Call',
-      started: c.metaData?.started || c.started,
-      duration: c.metaData?.duration || c.duration || 0,
-      url: c.metaData?.url,
-      direction: c.metaData?.direction,
-      parties: c.parties || [],
-      topics: (c.content?.topics || []).map((t: any) => t.name || t),
-      trackers: c.content?.trackers || [],
-      brief: c.content?.brief || '',
-      keyPoints: (c.content?.keyPoints || []).map((kp: any) => kp.text || kp),
-      actionItems: (c.content?.actionItems || []).map((ai: any) => ai.snippet || ai),
-      interactionStats: c.interaction || null,
-      context: c.context || [],
-      accountName: extractFieldValues(c.context, 'name', 'Account')[0] || '',
-      accountIndustry: extractFieldValues(c.context, 'industry', 'Account')[0] || '',
-      accountWebsite: extractFieldValues(c.context, 'website', 'Account')[0] || '',
-    }));
+    const normalized = extensiveCalls.map(normalizeExtensiveCall);
     return NextResponse.json({ calls: normalized });
 
   } catch (error) {
