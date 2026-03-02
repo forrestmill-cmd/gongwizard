@@ -19,6 +19,7 @@ import {
   MessageSquare,
   BarChart3,
   Send,
+  Download,
 } from 'lucide-react';
 import { isInternalParty } from '@/lib/format-utils';
 import { buildUtterances, alignTrackersToUtterances, extractTrackerOccurrences } from '@/lib/tracker-alignment';
@@ -78,6 +79,25 @@ interface AnalyzePanelProps {
   selectedCalls: any[];
   session: any;
   allCalls: any[];
+}
+
+// ─── Export helpers ─────────────────────────────────────────────────────────
+
+function escapeCSV(val: string): string {
+  if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+    return '"' + val.replace(/"/g, '""') + '"';
+  }
+  return val;
+}
+
+function downloadBlob(content: string, filename: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ─── Template shortcuts ─────────────────────────────────────────────────────
@@ -362,6 +382,43 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
     }
   }, [followUpInput, followUps, processedDataCache, question, callFindings]);
 
+  // ─── Export ─────────────────────────────────────────────────────────────
+
+  const handleExportJSON = () => {
+    const exportDate = new Date().toISOString().split('T')[0];
+    const payload = {
+      question,
+      exportDate,
+      summary: overallSummary,
+      themes,
+      callFindings,
+      followUpAnswers: followUps,
+    };
+    downloadBlob(
+      JSON.stringify(payload, null, 2),
+      `gongwizard-findings-${exportDate}.json`,
+      'application/json'
+    );
+  };
+
+  const handleExportCSV = () => {
+    const headers = ['Call Title', 'Account', 'Finding Type', 'Significance', 'Quote', 'Timestamp', 'Context'];
+    const rows = callFindings.flatMap(cf =>
+      cf.findings.map(f => [
+        escapeCSV(cf.callTitle),
+        escapeCSV(cf.account),
+        escapeCSV(f.finding_type),
+        escapeCSV(f.significance),
+        escapeCSV(f.exact_quote),
+        escapeCSV(f.timestamp),
+        escapeCSV(f.context),
+      ])
+    );
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const exportDate = new Date().toISOString().split('T')[0];
+    downloadBlob(csv, `gongwizard-findings-${exportDate}.csv`, 'text/csv');
+  };
+
   // ─── Reset ──────────────────────────────────────────────────────────────
 
   const handleReset = () => {
@@ -541,8 +598,18 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
       {stage === 'results' && (
         <div className="space-y-4">
           {/* Token usage */}
-          <div className="text-xs text-muted-foreground">
-            Tokens used: {tokensUsed.toLocaleString()} / {TOKEN_BUDGET.toLocaleString()}
+          <div className="flex items-center justify-between">
+            <div className="text-xs text-muted-foreground">
+              Tokens used: {tokensUsed.toLocaleString()} / {TOKEN_BUDGET.toLocaleString()}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={handleExportJSON}>
+                <Download className="h-3.5 w-3.5 mr-1" /> JSON
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleExportCSV}>
+                <Download className="h-3.5 w-3.5 mr-1" /> CSV
+              </Button>
+            </div>
           </div>
 
           {/* Overall summary */}

@@ -16,6 +16,7 @@ import {
   Loader2,
   Download,
   Copy,
+  Archive,
   LogOut,
   Search,
   CheckSquare,
@@ -95,7 +96,7 @@ export default function CallsPage() {
 
   const [rightPanelTab, setRightPanelTab] = useState<'export' | 'analyze'>('analyze');
 
-  const [exportFormat, setExportFormat] = useState<'markdown' | 'xml' | 'jsonl'>('markdown');
+  const [exportFormat, setExportFormat] = useState<'markdown' | 'xml' | 'jsonl' | 'csv'>('markdown');
   const [exportOpts, setExportOpts] = useState<ExportOptions>({
     removeFillerGreetings: true,
     condenseMonologues: true,
@@ -106,7 +107,7 @@ export default function CallsPage() {
 
   const filters = useFilterState();
 
-  const { exporting, copied, handleExport, handleCopy } = useCallExport({
+  const { exporting, copied, handleExport, handleCopy, handleZipExport } = useCallExport({
     selectedIds,
     session,
     calls,
@@ -745,6 +746,9 @@ export default function CallsPage() {
                           <TabsTrigger value="jsonl" className="flex-1 text-xs">
                             JSONL
                           </TabsTrigger>
+                          <TabsTrigger value="csv" className="flex-1 text-xs">
+                            CSV
+                          </TabsTrigger>
                         </TabsList>
                       </Tabs>
                     </div>
@@ -812,6 +816,16 @@ export default function CallsPage() {
                           {copied ? 'Copied!' : 'Copy to Clipboard'}
                         </Button>
                       )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={handleZipExport}
+                        disabled={exporting || selectedIds.size === 0}
+                      >
+                        {exporting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Archive className="h-4 w-4 mr-1" />}
+                        ZIP Bundle
+                      </Button>
                     </div>
 
                     <div className="flex gap-1 flex-wrap pt-1">

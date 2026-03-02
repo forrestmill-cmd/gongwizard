@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { format } from 'date-fns';
+import { downloadZip } from 'client-zip';
 import { isInternalParty, downloadFile } from '@/lib/format-utils';
 import {
   groupTranscriptTurns,
@@ -16,7 +17,7 @@ interface UseCallExportParams {
   selectedIds: Set<string>;
   session: any;
   calls: any[];
-  exportFormat: 'markdown' | 'xml' | 'jsonl';
+  exportFormat: 'markdown' | 'xml' | 'jsonl' | 'csv';
   exportOpts: ExportOptions;
 }
 
@@ -99,7 +100,7 @@ export function useCallExport({
     setExporting(true);
     try {
       const callsForExport = await fetchTranscriptsForSelected();
-      const { content, extension, mimeType } = buildExportContent(callsForExport, exportFormat, exportOpts);
+      const { content, extension, mimeType } = buildExportContent(callsForExport, exportFormat, exportOpts, calls);
       downloadFile(content, `gong-transcripts-${format(new Date(), 'yyyy-MM-dd')}.${extension}`, mimeType);
     } catch (err: any) {
       alert(err.message || 'Export failed');
@@ -113,7 +114,7 @@ export function useCallExport({
     setExporting(true);
     try {
       const callsForExport = await fetchTranscriptsForSelected();
-      const { content } = buildExportContent(callsForExport, exportFormat, exportOpts);
+      const { content } = buildExportContent(callsForExport, exportFormat, exportOpts, calls);
       await navigator.clipboard.writeText(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -124,5 +125,55 @@ export function useCallExport({
     }
   }, [selectedIds, exportFormat, exportOpts, fetchTranscriptsForSelected]);
 
-  return { exporting, copied, handleExport, handleCopy };
+  const handleZipExport = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    setExporting(true);
+    try {
+      const callsForExport = await fetchTranscriptsForSelected();
+      const exportDate = new Date();
+      const { extension } = buildExportContent([], exportFormat, exportOpts, calls);
+
+      const fileEntries: { name: string; lastModified: Date; input: string }[] = [];
+
+      const manifestEntries: { id: string; title: string; date: string; filename: string }[] = [];
+
+      for (const call of callsForExport) {
+        const { content } = buildExportContent([call], exportFormat, exportOpts, calls);
+        const sanitized = (call.title || 'untitled')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 50);
+        const filename = `calls/${sanitized}-${call.date || 'no-date'}.${extension}`;
+        fileEntries.push({ name: filename, lastModified: exportDate, input: content });
+        manifestEntries.push({ id: call.id, title: call.title, date: call.date, filename });
+      }
+
+      const manifest = {
+        exportDate: exportDate.toISOString(),
+        callCount: callsForExport.length,
+        format: exportFormat,
+        calls: manifestEntries,
+      };
+
+      const files = [
+        { name: 'manifest.json', lastModified: exportDate, input: JSON.stringify(manifest, null, 2) },
+        ...fileEntries,
+      ];
+
+      const blob = await downloadZip(files).blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `gong-export-${format(exportDate, 'yyyy-MM-dd')}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err.message || 'ZIP export failed');
+    } finally {
+      setExporting(false);
+    }
+  }, [selectedIds, exportFormat, exportOpts, fetchTranscriptsForSelected, calls]);
+
+  return { exporting, copied, handleExport, handleCopy, handleZipExport };
 }

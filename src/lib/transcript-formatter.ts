@@ -278,15 +278,66 @@ export function buildJSONL(calls: CallForExport[], opts: ExportOptions): string 
     .join('\n');
 }
 
+export function buildCSVSummary(calls: CallForExport[], allCalls: any[]): string {
+  const headers = [
+    'Call ID', 'Title', 'Date', 'Duration (s)', 'Duration', 'Account',
+    'Topics', 'Trackers', 'Talk Ratio %', 'Brief', 'Key Points', 'Action Items',
+    'Internal Speakers', 'External Speakers', 'Gong URL'
+  ];
+
+  const callMap = new Map(allCalls.map((c: any) => [c.id, c]));
+
+  const rows = calls.map(call => {
+    const full = callMap.get(call.id) || {} as any;
+    const internalSpeakers = call.speakers.filter(s => s.isInternal).map(s => s.name).join('; ');
+    const externalSpeakers = call.speakers.filter(s => !s.isInternal).map(s => s.name).join('; ');
+    const talkRatio = full.talkRatio != null ? Math.round(full.talkRatio * 100).toString() : (full.interactionStats?.talkRatio != null ? Math.round(full.interactionStats.talkRatio * 100).toString() : '');
+
+    return [
+      call.id,
+      call.title,
+      call.date,
+      call.duration.toString(),
+      formatDuration(call.duration),
+      call.accountName || full.accountName || '',
+      (full.topics || []).join('; '),
+      (full.trackers || []).join('; '),
+      talkRatio,
+      (call.brief || full.brief || '').replace(/\n/g, ' '),
+      (full.keyPoints || []).join('; '),
+      (full.actionItems || []).join('; '),
+      internalSpeakers,
+      externalSpeakers,
+      full.url || '',
+    ];
+  });
+
+  const escapeCSV = (val: string) => {
+    if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+      return '"' + val.replace(/"/g, '""') + '"';
+    }
+    return val;
+  };
+
+  const lines = [headers.map(escapeCSV).join(',')];
+  for (const row of rows) {
+    lines.push(row.map(escapeCSV).join(','));
+  }
+  return lines.join('\n');
+}
+
 export function buildExportContent(
   calls: CallForExport[],
-  fmt: 'markdown' | 'xml' | 'jsonl',
-  opts: ExportOptions
+  fmt: 'markdown' | 'xml' | 'jsonl' | 'csv',
+  opts: ExportOptions,
+  allCalls?: any[]
 ): { content: string; extension: string; mimeType: string } {
   if (fmt === 'markdown') {
     return { content: buildMarkdown(calls, opts), extension: 'md', mimeType: 'text/markdown' };
   } else if (fmt === 'xml') {
     return { content: buildXML(calls, opts), extension: 'xml', mimeType: 'application/xml' };
+  } else if (fmt === 'csv') {
+    return { content: buildCSVSummary(calls, allCalls || []), extension: 'csv', mimeType: 'text/csv' };
   } else {
     return { content: buildJSONL(calls, opts), extension: 'jsonl', mimeType: 'application/jsonl' };
   }
