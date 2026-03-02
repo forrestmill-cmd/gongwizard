@@ -106,16 +106,25 @@ Full auto-generated docs in `docs/generated/`. See [`docs/generated/README.md`](
 
 Regenerate: run `/doc-update` in Claude Code from within the project directory.
 
-## Reference Code & Legacy
+## PREVIOUS VERSIONS — READ BEFORE BUILDING NEW FEATURES
 
-- Python v1: `../gong-wizard-uri/gong-wizard-web-main/app.py`
-- API docs: `../gong_api_full_reference_COMPLETE.docx.md` (1,942 lines, authoritative)
-- Older variants (reference only): `../gong-wizard-two-main/`, `../gong-wizard-web-main/`
-- Raw data: `../Call summaries/`
+GongWizard v4 (this repo) was built from scratch in Next.js, but **three prior Python versions exist** with features, patterns, and lessons that MUST be consulted before implementing anything that might already be solved. All three live in sibling directories under `/Users/forrestmiller/Claude/projects/GongWizard/`.
 
-### Legacy Codebase Documentation
+| Version | Directory | Key Differentiator | Full Docs |
+|---------|-----------|-------------------|-----------|
+| **v1 — gong-wizard-uri** | `../gong-wizard-uri/gong-wizard-web-main/` | Most feature-rich: OAuth login, Claude AI analysis, chatbot, advanced export | `../gong-wizard-uri/gong-wizard-web-main/DOCUMENTATION.md` |
+| **v2 — gong-wizard-two** | `../gong-wizard-two-main/` | Utterance-level output, tracker alignment, 18 config tabs, most granular controls | `../gong-wizard-two-main/DOCUMENTATION.md` |
+| **v3 — gong-wizard-web** | `../gong-wizard-web-main/` | Simplest: no auth, no AI, stateless creds — closest to v4's architecture | `../gong-wizard-web-main/DOCUMENTATION.md` |
 
-Each legacy Python codebase has a full `DOCUMENTATION.md` covering routes, pipeline, config, output formats, and design decisions:
-- **gong-wizard-uri** (most feature-rich — OAuth, Claude AI, chatbot): `../gong-wizard-uri/gong-wizard-web-main/DOCUMENTATION.md`
-- **gong-wizard-web** (simplest — no auth, no AI, stateless creds): `../gong-wizard-web-main/DOCUMENTATION.md`
-- **gong-wizard-two** (utterance-level output, tracker alignment, 18 config tabs): `../gong-wizard-two-main/DOCUMENTATION.md`
+Each `DOCUMENTATION.md` covers: routes, pipeline, config, output formats, and design decisions.
+
+**When to consult these:**
+- Adding a feature → check if a prior version already implemented it
+- Debugging Gong API behavior → v1 has the most battle-tested API handling
+- Export format questions → v2 has the most format options and configurability
+- Architecture decisions → v3 is the most similar to v4's stateless proxy model
+
+### Other Reference Materials
+
+- **Gong API reference:** `../gong_api_full_reference_COMPLETE.docx.md` (1,942 lines, authoritative)
+- **Raw call data samples:** `../Call summaries/`
