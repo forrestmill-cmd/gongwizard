@@ -9,7 +9,8 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Separator } from '@/components/ui/separator';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import AnalyzePanel from '@/components/analyze-panel';
 import { Slider } from '@/components/ui/slider';
 import {
   Loader2,
@@ -20,6 +21,7 @@ import {
   CheckSquare,
   Square,
   AlertCircle,
+  Sparkles,
 } from 'lucide-react';
 import { format, subDays } from 'date-fns';
 import { estimateTokens, contextLabel, contextColor } from '@/lib/token-utils';
@@ -90,6 +92,8 @@ export default function CallsPage() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [workspaceId, setWorkspaceId] = useState<string>('');
+
+  const [rightPanelTab, setRightPanelTab] = useState<'export' | 'analyze'>('analyze');
 
   const [exportFormat, setExportFormat] = useState<'markdown' | 'xml' | 'jsonl'>('markdown');
   const [exportOpts, setExportOpts] = useState<ExportOptions>({
@@ -673,126 +677,156 @@ export default function CallsPage() {
           })}
         </main>
 
-        {/* Right sidebar: export panel */}
-        <aside className="w-[280px] shrink-0 border-l bg-background p-4 overflow-y-auto hidden lg:block">
-          {selectedIds.size === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 py-10">
-              <p className="text-sm font-medium">No calls selected</p>
-              <p className="text-xs text-center">Select calls from the list to export them</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div>
-                <p className="font-semibold text-sm">
-                  {selectedIds.size} {selectedIds.size === 1 ? 'call' : 'calls'} selected
-                </p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  ~{tokenEstimate.toLocaleString()} tokens estimated
-                </p>
-                <p className={`text-xs mt-0.5 font-medium ${contextColor(tokenEstimate)}`}>
-                  {contextLabel(tokenEstimate)}
-                </p>
-              </div>
+        {/* Right sidebar: analyze + export panel */}
+        <aside className="w-[280px] shrink-0 border-l bg-background overflow-y-auto hidden lg:flex lg:flex-col">
+          {/* Tab toggle */}
+          <div className="border-b px-4 pt-3 pb-0 shrink-0">
+            <Tabs value={rightPanelTab} onValueChange={(v) => setRightPanelTab(v as 'export' | 'analyze')}>
+              <TabsList className="w-full h-8">
+                <TabsTrigger value="analyze" className="flex-1 text-xs gap-1">
+                  <Sparkles className="size-3" />
+                  Analyze
+                </TabsTrigger>
+                <TabsTrigger value="export" className="flex-1 text-xs gap-1">
+                  <Download className="size-3" />
+                  Export
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
 
-              <Separator />
+          <div className="flex-1 overflow-y-auto p-4">
+            {rightPanelTab === 'analyze' && (
+              <AnalyzePanel
+                selectedCalls={selectedCalls}
+                session={session}
+                allCalls={calls}
+              />
+            )}
 
-              <div className="space-y-2">
-                <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Format
-                </Label>
-                <Tabs
-                  value={exportFormat}
-                  onValueChange={(v) => setExportFormat(v as any)}
-                >
-                  <TabsList className="w-full h-8 text-xs">
-                    <TabsTrigger value="markdown" className="flex-1 text-xs">
-                      Markdown
-                    </TabsTrigger>
-                    <TabsTrigger value="xml" className="flex-1 text-xs">
-                      XML
-                    </TabsTrigger>
-                    <TabsTrigger value="jsonl" className="flex-1 text-xs">
-                      JSONL
-                    </TabsTrigger>
-                  </TabsList>
-                </Tabs>
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Options
-                </Label>
-                <div className="space-y-2">
-                  {(
-                    [
-                      ['removeFillerGreetings', 'Remove filler/greetings'],
-                      ['condenseMonologues', 'Condense internal monologues'],
-                      ['includeMetadata', 'Include call metadata'],
-                      ['includeAIBrief', 'Include Gong AI brief'],
-                      ['includeInteractionStats', 'Include interaction stats'],
-                    ] as [keyof ExportOptions, string][]
-                  ).map(([key, label]) => (
-                    <div key={key} className="flex items-center gap-2">
-                      <Checkbox
-                        id={`opt-${key}`}
-                        checked={exportOpts[key]}
-                        onCheckedChange={(v) =>
-                          setExportOpts((prev) => ({ ...prev, [key]: !!v }))
-                        }
-                      />
-                      <Label htmlFor={`opt-${key}`} className="text-xs cursor-pointer leading-tight">
-                        {label}
-                      </Label>
+            {rightPanelTab === 'export' && (
+              <>
+                {selectedIds.size === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 py-10">
+                    <p className="text-sm font-medium">No calls selected</p>
+                    <p className="text-xs text-center">Select calls from the list to export them</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div>
+                      <p className="font-semibold text-sm">
+                        {selectedIds.size} {selectedIds.size === 1 ? 'call' : 'calls'} selected
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        ~{tokenEstimate.toLocaleString()} tokens estimated
+                      </p>
+                      <p className={`text-xs mt-0.5 font-medium ${contextColor(tokenEstimate)}`}>
+                        {contextLabel(tokenEstimate)}
+                      </p>
                     </div>
-                  ))}
-                </div>
-              </div>
 
-              <Separator />
+                    <Separator />
 
-              <div className="space-y-2">
-                <Button
-                  className="w-full"
-                  size="sm"
-                  onClick={handleExport}
-                  disabled={exporting}
-                >
-                  {exporting ? (
-                    <>
-                      <Loader2 className="size-3.5 animate-spin" />
-                      Exporting…
-                    </>
-                  ) : (
-                    <>
-                      <Download className="size-3.5" />
-                      Download
-                    </>
-                  )}
-                </Button>
-                {selectedIds.size <= 10 && (
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    size="sm"
-                    onClick={handleCopy}
-                    disabled={exporting}
-                  >
-                    <Copy className="size-3.5" />
-                    {copied ? 'Copied!' : 'Copy to Clipboard'}
-                  </Button>
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Format
+                      </Label>
+                      <Tabs
+                        value={exportFormat}
+                        onValueChange={(v) => setExportFormat(v as any)}
+                      >
+                        <TabsList className="w-full h-8 text-xs">
+                          <TabsTrigger value="markdown" className="flex-1 text-xs">
+                            Markdown
+                          </TabsTrigger>
+                          <TabsTrigger value="xml" className="flex-1 text-xs">
+                            XML
+                          </TabsTrigger>
+                          <TabsTrigger value="jsonl" className="flex-1 text-xs">
+                            JSONL
+                          </TabsTrigger>
+                        </TabsList>
+                      </Tabs>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Options
+                      </Label>
+                      <div className="space-y-2">
+                        {(
+                          [
+                            ['removeFillerGreetings', 'Remove filler/greetings'],
+                            ['condenseMonologues', 'Condense internal monologues'],
+                            ['includeMetadata', 'Include call metadata'],
+                            ['includeAIBrief', 'Include Gong AI brief'],
+                            ['includeInteractionStats', 'Include interaction stats'],
+                          ] as [keyof ExportOptions, string][]
+                        ).map(([key, label]) => (
+                          <div key={key} className="flex items-center gap-2">
+                            <Checkbox
+                              id={`opt-${key}`}
+                              checked={exportOpts[key]}
+                              onCheckedChange={(v) =>
+                                setExportOpts((prev) => ({ ...prev, [key]: !!v }))
+                              }
+                            />
+                            <Label htmlFor={`opt-${key}`} className="text-xs cursor-pointer leading-tight">
+                              {label}
+                            </Label>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    <div className="space-y-2">
+                      <Button
+                        className="w-full"
+                        size="sm"
+                        onClick={handleExport}
+                        disabled={exporting}
+                      >
+                        {exporting ? (
+                          <>
+                            <Loader2 className="size-3.5 animate-spin" />
+                            Exporting…
+                          </>
+                        ) : (
+                          <>
+                            <Download className="size-3.5" />
+                            Download
+                          </>
+                        )}
+                      </Button>
+                      {selectedIds.size <= 10 && (
+                        <Button
+                          variant="outline"
+                          className="w-full"
+                          size="sm"
+                          onClick={handleCopy}
+                          disabled={exporting}
+                        >
+                          <Copy className="size-3.5" />
+                          {copied ? 'Copied!' : 'Copy to Clipboard'}
+                        </Button>
+                      )}
+                    </div>
+
+                    <div className="flex gap-1 flex-wrap pt-1">
+                      <Button variant="ghost" size="xs" onClick={selectAll} className="h-6 text-xs">
+                        Select All
+                      </Button>
+                      <Button variant="ghost" size="xs" onClick={deselectAll} className="h-6 text-xs">
+                        Deselect All
+                      </Button>
+                    </div>
+                  </div>
                 )}
-              </div>
-
-              <div className="flex gap-1 flex-wrap pt-1">
-                <Button variant="ghost" size="xs" onClick={selectAll} className="h-6 text-xs">
-                  Select All
-                </Button>
-                <Button variant="ghost" size="xs" onClick={deselectAll} className="h-6 text-xs">
-                  Deselect All
-                </Button>
-              </div>
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </aside>
       </div>
 
