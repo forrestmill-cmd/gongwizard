@@ -3,7 +3,8 @@
 import { useState, useCallback } from 'react';
 import { format } from 'date-fns';
 import { downloadZip } from 'client-zip';
-import { isInternalParty, downloadFile } from '@/lib/format-utils';
+import { isInternalParty } from '@/lib/format-utils';
+import { downloadFile } from '@/lib/browser-utils';
 import {
   groupTranscriptTurns,
   buildExportContent,

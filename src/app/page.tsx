@@ -7,10 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Eye, EyeOff, Lock, X, Shield, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
-
-function saveSession(data: any) {
-  sessionStorage.setItem('gongwizard_session', JSON.stringify(data));
-}
+import { saveSession } from '@/lib/session';
 
 export default function ConnectPage() {
   const router = useRouter();

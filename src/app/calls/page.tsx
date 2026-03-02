@@ -42,13 +42,10 @@ import {
 import { type ExportOptions } from '@/lib/transcript-formatter';
 import { useCallExport } from '@/hooks/useCallExport';
 import { useFilterState } from '@/hooks/useFilterState';
+import { getSession } from '@/lib/session';
 
-// ─── Session helpers ────────────────────────────────────────────────────────
-
-function getSession(): any | null {
-  const s = sessionStorage.getItem('gongwizard_session');
-  return s ? JSON.parse(s) : null;
-}
+const WORDS_PER_CALL_MINUTE = 130;
+const WORDS_TO_TOKENS_RATIO = 1.3;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -71,6 +68,93 @@ interface GongCall {
   outline?: Array<{ name: string; startTimeMs: number; durationMs: number; items?: Array<{ text: string; startTimeMs: number; durationMs: number }> }>;
   questions?: any[];
   url?: string;
+}
+
+// ─── CallCard ────────────────────────────────────────────────────────────────
+
+function CallCard({ call, isSelected, onToggle }: {
+  call: GongCall;
+  isSelected: boolean;
+  onToggle: (id: string) => void;
+}) {
+  const callDate = call.started ? format(new Date(call.started), 'MMM d, yyyy') : '';
+  return (
+    <Card
+      onClick={() => onToggle(call.id)}
+      className={`cursor-pointer transition-all hover:shadow-md ${
+        isSelected ? 'ring-2 ring-primary shadow-sm' : ''
+      }`}
+    >
+      <CardContent className="p-4">
+        <div className="flex items-start gap-3">
+          <Checkbox
+            checked={isSelected}
+            onCheckedChange={() => onToggle(call.id)}
+            onClick={(e) => e.stopPropagation()}
+            className="mt-0.5 shrink-0"
+          />
+          <div className="flex-1 min-w-0 space-y-2">
+            <div className="flex items-start justify-between gap-2">
+              <p className="font-semibold text-sm leading-tight">{call.title}</p>
+              <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">
+                {callDate}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+              <span>{formatDuration(call.duration)}</span>
+              <span>
+                {call.internalSpeakerCount} internal, {call.externalSpeakerCount} external
+              </span>
+              {call.accountName && <span>{call.accountName}</span>}
+            </div>
+
+            {(call.topics?.length || call.trackers?.length) ? (
+              <div className="flex flex-wrap gap-1">
+                {(call.topics || []).map((topic) => (
+                  <Badge key={topic} variant="secondary" className="text-xs px-1.5 py-0">
+                    {topic}
+                  </Badge>
+                ))}
+                {(call.trackers || []).map((tracker) => (
+                  <Badge
+                    key={tracker}
+                    variant="outline"
+                    className="text-xs px-1.5 py-0 border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-300"
+                  >
+                    {tracker}
+                  </Badge>
+                ))}
+              </div>
+            ) : null}
+
+            {call.brief && (
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                {truncateToFirstSentence(call.brief)}
+              </p>
+            )}
+
+            {call.talkRatio !== undefined && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-16 shrink-0">
+                  Talk ratio
+                </span>
+                <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-primary rounded-full transition-all"
+                    style={{ width: `${Math.min(100, (call.talkRatio || 0) * 100)}%` }}
+                  />
+                </div>
+                <span className="text-xs text-muted-foreground w-8 text-right">
+                  {Math.round((call.talkRatio || 0) * 100)}%
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 // ─── Main component ─────────────────────────────────────────────────────────
@@ -277,8 +361,8 @@ export default function CallsPage() {
   const tokenEstimate = useMemo(() => {
     return selectedCalls.reduce((sum, c) => {
       const minutes = c.duration / 60;
-      const estimatedWords = minutes * 130;
-      return sum + Math.ceil(estimatedWords * 1.3);
+      const estimatedWords = minutes * WORDS_PER_CALL_MINUTE;
+      return sum + Math.ceil(estimatedWords * WORDS_TO_TOKENS_RATIO);
     }, 0);
   }, [selectedCalls]);
 
@@ -591,88 +675,14 @@ export default function CallsPage() {
             </div>
           )}
 
-          {filteredCalls.map((call) => {
-            const isSelected = selectedIds.has(call.id);
-            const callDate = call.started ? format(new Date(call.started), 'MMM d, yyyy') : '';
-            return (
-              <Card
-                key={call.id}
-                onClick={() => toggleSelect(call.id)}
-                className={`cursor-pointer transition-all hover:shadow-md ${
-                  isSelected ? 'ring-2 ring-primary shadow-sm' : ''
-                }`}
-              >
-                <CardContent className="p-4">
-                  <div className="flex items-start gap-3">
-                    <Checkbox
-                      checked={isSelected}
-                      onCheckedChange={() => toggleSelect(call.id)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="mt-0.5 shrink-0"
-                    />
-                    <div className="flex-1 min-w-0 space-y-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="font-semibold text-sm leading-tight">{call.title}</p>
-                        <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">
-                          {callDate}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
-                        <span>{formatDuration(call.duration)}</span>
-                        <span>
-                          {call.internalSpeakerCount} internal, {call.externalSpeakerCount} external
-                        </span>
-                        {call.accountName && <span>{call.accountName}</span>}
-                      </div>
-
-                      {(call.topics?.length || call.trackers?.length) ? (
-                        <div className="flex flex-wrap gap-1">
-                          {(call.topics || []).map((topic) => (
-                            <Badge key={topic} variant="secondary" className="text-xs px-1.5 py-0">
-                              {topic}
-                            </Badge>
-                          ))}
-                          {(call.trackers || []).map((tracker) => (
-                            <Badge
-                              key={tracker}
-                              variant="outline"
-                              className="text-xs px-1.5 py-0 border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-300"
-                            >
-                              {tracker}
-                            </Badge>
-                          ))}
-                        </div>
-                      ) : null}
-
-                      {call.brief && (
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          {truncateToFirstSentence(call.brief)}
-                        </p>
-                      )}
-
-                      {call.talkRatio !== undefined && (
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-muted-foreground w-16 shrink-0">
-                            Talk ratio
-                          </span>
-                          <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-primary rounded-full transition-all"
-                              style={{ width: `${Math.min(100, (call.talkRatio || 0) * 100)}%` }}
-                            />
-                          </div>
-                          <span className="text-xs text-muted-foreground w-8 text-right">
-                            {Math.round((call.talkRatio || 0) * 100)}%
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+          {filteredCalls.map((call) => (
+            <CallCard
+              key={call.id}
+              call={call}
+              isSelected={selectedIds.has(call.id)}
+              onToggle={toggleSelect}
+            />
+          ))}
         </main>
 
         {/* Right sidebar: analyze + export panel */}

@@ -16,16 +16,6 @@ export function isInternalParty(party: any, internalDomains: string[]): boolean 
   return !!(domain && internalDomains.includes(domain));
 }
 
-export function downloadFile(content: string, filename: string, mimeType: string) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 export function formatTimestamp(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   const min = Math.floor(totalSeconds / 60);
