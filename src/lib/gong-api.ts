@@ -20,25 +20,58 @@ export const GONG_RATE_LIMIT_MS = 350;
 // Gong API limits: /v2/calls/extensive accepts max 10 IDs, /v2/calls/transcript accepts max 50
 export const EXTENSIVE_BATCH_SIZE = 10;
 export const TRANSCRIPT_BATCH_SIZE = 50;
+export const MAX_RETRIES = 5;
 
 export function makeGongFetch(baseUrl: string, authHeader: string) {
   return async function gongFetch(endpoint: string, options: RequestInit = {}) {
     const url = `${baseUrl}${endpoint}`;
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        'Authorization': `Basic ${authHeader}`,
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-    });
+    let lastError: unknown;
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw new GongApiError(response.status, text, endpoint);
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const response = await fetch(url, {
+          ...options,
+          headers: {
+            'Authorization': `Basic ${authHeader}`,
+            'Content-Type': 'application/json',
+            ...options.headers,
+          },
+        });
+
+        if (response.ok) {
+          return response.json();
+        }
+
+        if (response.status === 401 || response.status === 403) {
+          const text = await response.text().catch(() => '');
+          throw new GongApiError(response.status, text, endpoint);
+        }
+
+        if (response.status === 429) {
+          const retryAfter = response.headers.get('Retry-After');
+          const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : Math.min(2 ** attempt * 2, 30) * 1000;
+          console.warn(`Gong API rate limited on ${endpoint}, attempt ${attempt + 1}/${MAX_RETRIES}, retrying in ${delayMs}ms`);
+          await sleep(delayMs);
+          continue;
+        }
+
+        const text = await response.text().catch(() => '');
+        lastError = new GongApiError(response.status, text, endpoint);
+        const delayMs = Math.min(2 ** attempt * 2, 30) * 1000;
+        console.warn(`Gong API error ${response.status} on ${endpoint}, attempt ${attempt + 1}/${MAX_RETRIES}, retrying in ${delayMs}ms`);
+        await sleep(delayMs);
+      } catch (err) {
+        if (err instanceof GongApiError && (err.status === 401 || err.status === 403)) {
+          throw err;
+        }
+        lastError = err;
+        const delayMs = Math.min(2 ** attempt * 2, 30) * 1000;
+        console.warn(`Gong API network error on ${endpoint}, attempt ${attempt + 1}/${MAX_RETRIES}, retrying in ${delayMs}ms`, err);
+        await sleep(delayMs);
+      }
     }
 
-    return response.json();
+    throw lastError ?? new GongApiError(429, 'Max retries exceeded', endpoint);
   };
 }
 
