@@ -12,6 +12,12 @@ Last updated: 2026-03-02
 - [Lib Modules](lib-modules.md) — Shared library code, dependency graph, and configuration constants
 - [Configuration Reference](configuration-reference.md) — Environment variables, build config, feature flags, and third-party services
 
+## Bonus Reports
+
+- [TODO Report](todo-report.md) — TODO/FIXME/HACK scan results
+- [Dependency Audit](dependency-audit.md) — Unused and misplaced dependency analysis
+- [Recent Changes](recent-changes.md) — Git history and development focus summary
+
 ## How to Regenerate
 
 Run `/doc-update` in Claude Code from within the project directory.

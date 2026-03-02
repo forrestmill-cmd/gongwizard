@@ -1,12 +1,12 @@
-# GongWizard Architecture Overview
+# Architecture Overview
 
 ## System Overview
 
-GongWizard is a stateless Next.js 15 web application that lets Gong customers export call transcripts in formats optimized for AI analysis (ChatGPT, Claude, and other LLMs). The user connects using a Gong API access key and secret key, browses and filters calls by date range, selects calls of interest, and downloads or copies the transcripts in Markdown, XML, or JSONL format.
+GongWizard is a Next.js 15 web application that acts as a stateless proxy between a user's browser and the Gong REST API. Its purpose is to let Gong customers browse their recorded sales calls, select a subset, fetch transcripts, and export them in formats optimized for LLM consumption (Markdown, XML, JSONL). No data is persisted server-side at any layer — there is no database, no session store, and no server-side credential storage.
 
-The system has two authentication layers. A site-level password gate (`gw-auth` cookie, validated by `src/app/api/auth/route.ts` against `SITE_PASSWORD`) guards the entire app via `src/middleware.ts`. Once past that gate, users enter their Gong API credentials on the Connect page (`src/app/page.tsx`); those credentials are Base64-encoded into an `authHeader` string and stored in `sessionStorage` — never on the server. Every subsequent API call sends the `authHeader` value in the `X-Gong-Auth` header to the Next.js proxy routes, which forward it as HTTP Basic auth to the Gong API and return results to the client.
+The application uses a two-layer auth model. A site-level password gate (`/gate`) issues an httpOnly cookie (`gw-auth`) that middleware checks on every page request, restricting access to known users. Once past the gate, users supply their Gong API Access Key and Secret Key on the Connect page (`/`). Those credentials are base64-encoded into an auth header, stored in browser `sessionStorage` under the key `gongwizard_session`, and forwarded with every subsequent API proxy call via the `X-Gong-Auth` request header. Credentials are cleared when the browser tab closes.
 
-All business logic — speaker classification, transcript grouping, filtering, and export formatting — runs in the browser inside `src/app/calls/page.tsx`. There is no database, no server-side session storage, and no backend state. Credentials are cleared when the browser tab is closed.
+All business logic runs client-side in `src/app/calls/page.tsx`: speaker classification (internal vs. external via email domain matching), transcript grouping into turns, filler word removal, monologue condensing, token estimation, and all three export renderers. The three Next.js API routes (`/api/gong/connect`, `/api/gong/calls`, `/api/gong/transcripts`) are thin proxies that accept Gong credentials via `X-Gong-Auth`, forward requests to the Gong API with HTTP Basic auth, handle pagination, batching, and rate limiting, then return normalized JSON to the browser.
 
 ---
 
@@ -14,68 +14,46 @@ All business logic — speaker classification, transcript grouping, filtering, a
 
 ```mermaid
 flowchart TD
-    subgraph Browser["Browser (Client)"]
-        GatePage["src/app/gate/page.tsx\nGatePage\n(site password)"]
-        ConnectPage["src/app/page.tsx\nConnectPage\n(Gong credentials)"]
-        CallsPage["src/app/calls/page.tsx\nCallsPage\n(browse · filter · export)"]
-        SessionStorage[("sessionStorage\ngongwizard_session\nauthHeader · users · trackers · workspaces")]
+    subgraph Browser["Browser (Client-Side)"]
+        A[GatePage\nsrc/app/gate/page.tsx] -->|POST password| B[/api/auth/route.ts]
+        B -->|Set gw-auth cookie| C[ConnectPage\nsrc/app/page.tsx]
+        C -->|POST X-Gong-Auth header| D[/api/gong/connect/route.ts]
+        D -->|users, trackers, workspaces,\ninternalDomains| E[CallsPage\nsrc/app/calls/page.tsx]
+        E -->|POST X-Gong-Auth + date range| F[/api/gong/calls/route.ts]
+        F -->|normalized GongCall array| E
+        E -->|POST X-Gong-Auth + callIds| G[/api/gong/transcripts/route.ts]
+        G -->|transcript monologues| E
+        E -->|buildMarkdown / buildXML / buildJSONL| H[File Download / Clipboard]
     end
 
-    subgraph Middleware["Next.js Edge"]
-        MW["src/middleware.ts\nmiddleware()\ngw-auth cookie check"]
+    subgraph Middleware["Edge Middleware\nsrc/middleware.ts"]
+        M[Check gw-auth cookie\nRedirect to /gate if missing]
     end
 
-    subgraph APIRoutes["Next.js API Routes (Server — stateless proxies)"]
-        AuthRoute["src/app/api/auth/route.ts\nPOST /api/auth\nvalidates SITE_PASSWORD\nsets gw-auth cookie"]
-        ConnectRoute["src/app/api/gong/connect/route.ts\nPOST /api/gong/connect\nfetches users · trackers · workspaces"]
-        CallsRoute["src/app/api/gong/calls/route.ts\nPOST /api/gong/calls\nfetches + normalizes call list"]
-        TranscriptsRoute["src/app/api/gong/transcripts/route.ts\nPOST /api/gong/transcripts\nfetches transcript monologues"]
+    subgraph GongAPI["Gong REST API\nhttps://api.gong.io"]
+        G1[/v2/users]
+        G2[/v2/settings/trackers]
+        G3[/v2/workspaces]
+        G4[/v2/calls]
+        G5[/v2/calls/extensive]
+        G6[/v2/calls/transcript]
     end
 
-    subgraph GongAPI["Gong API (External)"]
-        GongUsers["GET /v2/users"]
-        GongTrackers["GET /v2/settings/trackers"]
-        GongWorkspaces["GET /v2/workspaces"]
-        GongCallsBasic["GET /v2/calls"]
-        GongCallsExtensive["POST /v2/calls/extensive"]
-        GongTranscripts["POST /v2/calls/transcript"]
+    subgraph Lib["src/lib/"]
+        L1[gong-api.ts\nGongApiError, makeGongFetch,\nhandleGongError, constants]
+        L2[utils.ts\ncn]
     end
 
-    subgraph UILib["src/components/ui/"]
-        UIComponents["Badge · Button · Calendar\nCard · Checkbox · Command\nDialog · Input · Label\nPopover · ScrollArea\nSeparator · Tabs\nToggle · ToggleGroup · Tooltip"]
-    end
-
-    subgraph Utils["src/lib/"]
-        UtilsCn["utils.ts — cn()"]
-    end
-
-    Browser -->|every request| MW
-    MW -->|no gw-auth cookie| GatePage
-    MW -->|cookie valid| ConnectPage
-
-    GatePage -->|POST /api/auth| AuthRoute
-    AuthRoute -->|sets gw-auth cookie| GatePage
-
-    ConnectPage -->|POST /api/gong/connect\nX-Gong-Auth header| ConnectRoute
-    ConnectRoute -->|Basic auth forwarded| GongUsers
-    ConnectRoute -->|Basic auth forwarded| GongTrackers
-    ConnectRoute -->|Basic auth forwarded| GongWorkspaces
-    ConnectRoute -->|users · trackers · workspaces · internalDomains| ConnectPage
-    ConnectPage -->|saveSession()| SessionStorage
-    ConnectPage -->|router.push| CallsPage
-
-    CallsPage -->|getSession()| SessionStorage
-    CallsPage -->|POST /api/gong/calls\nX-Gong-Auth header| CallsRoute
-    CallsRoute -->|Basic auth forwarded| GongCallsBasic
-    CallsRoute -->|Basic auth forwarded — batch 10| GongCallsExtensive
-    CallsRoute -->|normalized GongCall[]| CallsPage
-
-    CallsPage -->|POST /api/gong/transcripts\nX-Gong-Auth header| TranscriptsRoute
-    TranscriptsRoute -->|Basic auth forwarded — batch 50| GongTranscripts
-    TranscriptsRoute -->|transcripts[]| CallsPage
-
-    CallsPage --> UIComponents
-    UIComponents --> UtilsCn
+    Browser -->|every page request| Middleware
+    D --> G1
+    D --> G2
+    D --> G3
+    F --> G4
+    F --> G5
+    G --> G6
+    D --> L1
+    F --> L1
+    G --> L1
 ```
 
 ---
@@ -83,142 +61,159 @@ flowchart TD
 ## Key Components
 
 ### `src/middleware.ts`
-**Purpose:** Edge middleware that enforces site-level authentication on every request. Checks for the `gw-auth` cookie (value `"1"`); redirects to `/gate` if absent. Passes through `/gate`, `/api/`, `/_next/`, and `/favicon` paths unconditionally.
 
-**Key exports:** `middleware` function, `config` matcher.
+Enforces site-level auth on every request at the Next.js Edge layer. Checks for the `gw-auth` cookie (value `"1"`); if absent, redirects to `/gate`. Passes through requests to `/gate`, `/api/`, `/_next/`, and `/favicon` without checking the cookie.
 
-**Dependencies:** `next/server`. Nothing depends on it at runtime — it intercepts all requests before they reach any page or route handler.
+**Key exports:** `middleware` (default), `config` (matcher config).
+**Depends on:** `next/server`.
+**Depended on by:** All page routes implicitly via Next.js middleware config.
 
 ---
 
 ### `src/app/gate/page.tsx` — `GatePage`
-**Purpose:** Site password prompt. Submits to `POST /api/auth`; on success the server sets the `gw-auth` cookie and the router navigates to `/`.
 
-**Key exports:** default export `GatePage`.
+Client component that renders the site password entry form. Submits a POST to `/api/auth` with the entered password. On success, calls `router.push('/')` to redirect to `ConnectPage`.
 
-**Depends on:** `Button`, `Card`/`CardContent`/`CardHeader`/`CardTitle`, `Input`, `Label` from `src/components/ui/`.
+**Key exports:** `GatePage` (default export).
+**Depends on:** `Button`, `Card`, `CardContent`, `CardHeader`, `CardTitle`, `Input`, `Label` from `src/components/ui/`; `lucide-react` (`Eye`, `EyeOff`, `Loader2`).
 
 ---
 
 ### `src/app/api/auth/route.ts`
-**Purpose:** Validates the site password from the request body against `process.env.SITE_PASSWORD`. On match, sets an httpOnly `gw-auth` cookie with a 7-day max-age.
 
-**Key exports:** `POST` handler.
+POST handler that validates the submitted password against `process.env.SITE_PASSWORD`. On match, sets an httpOnly `gw-auth` cookie with a 7-day `maxAge` and returns `{ ok: true }`. Returns 401 on mismatch, 500 if `SITE_PASSWORD` is not configured.
 
-**Dependencies:** `next/server`. No external calls.
+**Key exports:** `POST` (named export, Next.js Route Handler).
+**Depends on:** `next/server` (`NextResponse`).
 
 ---
 
 ### `src/app/page.tsx` — `ConnectPage`
-**Purpose:** Step 1 of the main flow. Accepts Gong `accessKey` and `secretKey`, constructs a Base64 `authHeader` via `btoa()`, POSTs it to `/api/gong/connect`, and saves the returned session data (users, trackers, workspaces, internalDomains, authHeader) into `sessionStorage` under `gongwizard_session`. Navigates to `/calls` on success.
 
-**Key exports:** default export `ConnectPage`. Local helper `saveSession(data)`.
+Client component (Step 1 of the user flow). Accepts a Gong Access Key and Secret Key, base64-encodes them into an `authHeader` (`btoa(accessKey + ':' + secretKey)`), and POSTs to `/api/gong/connect` with the result as the `X-Gong-Auth` header. On success, calls `saveSession()` to write the response payload (`users`, `trackers`, `workspaces`, `internalDomains`, `authHeader`, `baseUrl`) to `sessionStorage` under `gongwizard_session`, then navigates to `/calls`.
 
-**Depends on:** `Button`, `Card`, `Input`, `Label` from `src/components/ui/`. Reads/writes `sessionStorage` directly (no custom hook).
+**Key exports:** `ConnectPage` (default export).
+**Key functions:** `saveSession` (module-scoped, writes to `sessionStorage`).
+**Depends on:** `Button`, `Card`, `CardContent`, `CardHeader`, `CardTitle`, `Input`, `Label` from `src/components/ui/`; `lucide-react`.
 
 ---
 
 ### `src/app/api/gong/connect/route.ts`
-**Purpose:** Validates Gong credentials and pre-fetches workspace-level reference data needed for the session. Fetches `/v2/users` (all pages), `/v2/settings/trackers` (all pages), and `/v2/workspaces` in parallel using `Promise.allSettled`. Derives `internalDomains` by extracting email domains from all users. Returns `{ users, trackers, workspaces, internalDomains, baseUrl, warnings? }`.
 
-**Key exports:** `POST` handler.
+POST proxy that initializes a Gong session. Reads `X-Gong-Auth` from request headers. Calls `/v2/users` (paginated), `/v2/settings/trackers` (paginated), and `/v2/workspaces` in parallel via `Promise.allSettled`. Extracts unique email domains from the user list to produce `internalDomains`. Returns all four datasets plus warnings for any failed sub-requests. Contains a local `fetchAllPages` utility that handles cursor-based pagination with `GONG_RATE_LIMIT_MS` delays between pages.
 
-**Key internals:** `GongApiError` class, `gongFetch()` helper, `fetchAllPages<T>()` paginator (handles cursor-based pagination with 350 ms inter-page delay).
-
-**Dependencies:** `next/server`. Calls Gong API directly via `fetch`.
+**Key exports:** `POST`.
+**Depends on:** `GongApiError`, `sleep`, `makeGongFetch`, `handleGongError`, `GONG_RATE_LIMIT_MS` from `src/lib/gong-api.ts`.
 
 ---
 
 ### `src/app/api/gong/calls/route.ts`
-**Purpose:** Two-phase call retrieval and normalization. Phase 1: paginates `GET /v2/calls` to collect all call IDs for the requested date range (and optional `workspaceId`). Phase 2: fetches full metadata via `POST /v2/calls/extensive` in batches of 10, requesting `parties`, `content` (topics, trackers, brief, keyPoints, actionItems, outline), and `context: 'Extended'`. Falls back to basic call data if `/v2/calls/extensive` returns 403. Normalizes both shapes into a flat `GongCall`-compatible object including `accountName`, `accountIndustry`, and `accountWebsite` extracted from nested CRM context.
 
-**Key exports:** `POST` handler.
+POST proxy that fetches call metadata for a date range. Two-step process:
 
-**Key internals:** `GongApiError` class, `gongFetch()`, `sleep()`, `extractFieldValues()` (parses Gong's nested `context.objects.fields` structure; ported from Python v1).
+1. Paginates `GET /v2/calls` to collect all call IDs in the date range (supports optional `workspaceId` filter).
+2. Batches IDs into groups of `EXTENSIVE_BATCH_SIZE` (10) and POSTs each batch to `/v2/calls/extensive` with a `contentSelector` requesting parties, topics, trackers, brief, keyPoints, actionItems, outline, and `Extended` CRM context.
 
-**Dependencies:** `next/server`. Calls Gong API directly.
+If `/v2/calls/extensive` returns 403 (API scope issue), falls back to basic call data with empty parties/topics/trackers. Normalizes both response shapes to a consistent flat object via `normalizeExtensiveCall`. Contains `extractFieldValues` to navigate Gong's nested `context.objects.fields` structure for CRM account data.
+
+**Key exports:** `POST`.
+**Key functions:** `extractFieldValues`, `normalizeExtensiveCall` (both module-scoped).
+**Depends on:** `GongApiError`, `sleep`, `makeGongFetch`, `handleGongError`, `GONG_RATE_LIMIT_MS`, `EXTENSIVE_BATCH_SIZE` from `src/lib/gong-api.ts`.
 
 ---
 
 ### `src/app/api/gong/transcripts/route.ts`
-**Purpose:** Fetches raw transcript monologues for a given list of call IDs. Sends call IDs to `POST /v2/calls/transcript` in batches of 50 with cursor-based pagination and 350 ms rate-limit delays between batches. Aggregates per-call monologues into a map and returns `{ transcripts: [{ callId, transcript }] }`.
 
-**Key exports:** `POST` handler.
+POST proxy that fetches transcript monologues for a list of call IDs. Batches IDs into groups of `TRANSCRIPT_BATCH_SIZE` (50) and POSTs each batch to `/v2/calls/transcript`. Accumulates monologues into a `transcriptMap` keyed by `callId`, handles cursor-based pagination within each batch, then returns an array of `{ callId, transcript }` objects.
 
-**Key internals:** `GongApiError` class, `gongFetch()`, `sleep()`.
-
-**Dependencies:** `next/server`. Calls Gong API directly.
+**Key exports:** `POST`.
+**Depends on:** `sleep`, `makeGongFetch`, `handleGongError`, `GONG_RATE_LIMIT_MS`, `TRANSCRIPT_BATCH_SIZE` from `src/lib/gong-api.ts`.
 
 ---
 
 ### `src/app/calls/page.tsx` — `CallsPage`
-**Purpose:** The main application screen. Reads the session from `sessionStorage`, displays a date-range picker and Load Calls button, renders a filterable/searchable call list, and handles export. Contains all client-side business logic: speaker classification, transcript processing, filtering, and all three export format renderers. This is the largest file in the project and contains no external hook dependencies — all state is local `useState`/`useMemo`.
 
-**Key exports:** default export `CallsPage`.
+The main application page (Step 2 of the user flow). Contains all client-side business logic. On mount reads `gongwizard_session` from `sessionStorage`; redirects to `/` if absent.
 
-**Key local interfaces:** `GongCall`, `ExportOptions`, `Speaker`, `TranscriptSentence`, `FormattedTurn`, `CallForExport`.
+**Call loading.** `loadCalls()` POSTs to `/api/gong/calls` with the date range and optional workspace filter. Processes the response with `isInternalParty` to classify speakers (using `party.affiliation` as primary signal, email domain match as fallback) and extracts active tracker names.
 
-**Key local functions:**
-- `saveSession` / `getSession` — `sessionStorage` read/write
-- `estimateTokens(text)` — divides character count by 4
-- `contextLabel(tokens)` / `contextColor(tokens)` — maps token count to context window labels and CSS color classes
-- `downloadFile(content, filename, mimeType)` — creates a Blob URL and triggers browser download
-- `formatDuration(seconds)` — formats seconds to `Xh Ym` / `Xm Ys`
-- `formatTimestamp(ms)` — converts milliseconds to `M:SS`
-- `groupTranscriptTurns(sentences, speakerMap)` — collapses consecutive same-speaker sentences into `FormattedTurn[]`
-- `buildMarkdown(calls, opts)` / `buildCallText(call, opts)` — Markdown export renderer
-- `buildXML(calls, opts)` — XML export renderer with `escapeXml()`
-- `buildJSONL(calls, opts)` — JSONL export renderer (one JSON object per line)
-- `filterFillerTurns(turns)` — removes short/filler utterances matching `FILLER_PATTERNS`
-- `condenseInternalMonologues(turns)` — merges runs of 3+ consecutive turns by the same internal speaker
-- `fetchTranscriptsForSelected()` — calls `/api/gong/transcripts`, then builds `speakerMap` from stored party data and runs `groupTranscriptTurns`
-- `handleExport()` / `handleCopy()` — orchestrate transcript fetch → format render → download or clipboard copy
+**Filtering.** `filteredCalls` (memoized with `useMemo`) applies text search on title and brief, an `excludeInternal` toggle, and per-tracker filters. `trackerCounts` (also memoized) precomputes how many loaded calls match each tracker.
 
-**Depends on:** all `src/components/ui/` components, `date-fns` (`format`, `subDays`), `lucide-react` icons.
+**Transcript fetch.** `fetchTranscriptsForSelected()` POSTs to `/api/gong/transcripts`, then builds a `speakerMap` from stored party data, flattens all `TranscriptSentence` objects from monologue tracks into chronological order, and calls `groupTranscriptTurns` to merge consecutive same-speaker sentences into `FormattedTurn` objects.
+
+**Export.** `buildExportContent` dispatches to `buildMarkdown`, `buildXML`, or `buildJSONL` based on selected format. Each renderer optionally applies `filterFillerTurns` (removes short social filler via `FILLER_PATTERNS`) and `condenseInternalMonologues` (merges runs of 3+ consecutive turns by the same internal speaker) per `ExportOptions`.
+
+**Token estimation.** `estimateTokens` (~4 chars/token heuristic), `contextLabel`, and `contextColor` display a live context-window fit indicator against common LLM context sizes.
+
+**Key types:** `GongCall`, `ExportOptions`, `Speaker`, `TranscriptSentence`, `FormattedTurn`, `CallForExport`.
+
+**Key functions:** `buildMarkdown`, `buildXML`, `buildJSONL`, `buildExportContent`, `buildCallText`, `groupTranscriptTurns`, `filterFillerTurns`, `condenseInternalMonologues`, `isInternalParty`, `estimateTokens`, `contextLabel`, `contextColor`, `formatDuration`, `formatTimestamp`, `escapeXml`, `downloadFile`, `getSession`, `saveSession`.
+
+**Depends on:** `Badge`, `Button`, `Card`, `CardContent`, `CardHeader`, `CardTitle`, `Checkbox`, `Input`, `Label`, `Separator`, `Tabs`, `TabsList`, `TabsTrigger` from `src/components/ui/`; `date-fns` (`format`, `subDays`); `lucide-react`.
 
 ---
 
-### `src/app/layout.tsx` — `RootLayout`
-**Purpose:** Next.js root layout. Loads `Geist` and `Geist_Mono` fonts via `next/font/google`, sets `<html lang="en">`, and exports page metadata (`title`, `description`).
+### `src/lib/gong-api.ts`
 
-**Key exports:** default export `RootLayout`, `metadata`.
+Shared utilities used by all three Gong proxy routes. Centralizes authenticated fetch construction, error handling, and API constants.
 
----
+**Key exports:**
+- `GongApiError` — Error subclass carrying `status` (HTTP status code) and `endpoint` string fields.
+- `makeGongFetch(baseUrl, authHeader)` — Returns a `gongFetch` closure that injects `Authorization: Basic <authHeader>` and `Content-Type: application/json` on every request; throws `GongApiError` on non-2xx responses.
+- `handleGongError(error)` — Converts a `GongApiError` or unknown error into an appropriate `NextResponse` JSON error. Maps 401 to `{ error: 'Invalid API credentials' }`, propagates 4xx status codes, falls back to 500.
+- `sleep(ms)` — Promise-based delay.
+- `GONG_RATE_LIMIT_MS = 350` — Inter-request delay (Gong enforces ~3 req/s).
+- `EXTENSIVE_BATCH_SIZE = 10` — Max IDs per `/v2/calls/extensive` POST.
+- `TRANSCRIPT_BATCH_SIZE = 50` — Max IDs per `/v2/calls/transcript` POST.
 
-### `src/components/ui/`
-**Purpose:** shadcn/ui component library — 15 pre-built, accessible UI primitives built on Radix UI primitives and styled with Tailwind v4 + `class-variance-authority`.
-
-**Components and their underlying primitives:**
-
-| File | Component(s) | Primitive |
-|---|---|---|
-| `badge.tsx` | `Badge`, `badgeVariants` | `radix-ui` Slot |
-| `button.tsx` | `Button`, `buttonVariants` | `radix-ui` Slot |
-| `calendar.tsx` | `Calendar`, `CalendarDayButton` | `react-day-picker` DayPicker |
-| `card.tsx` | `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter` | plain `div` |
-| `checkbox.tsx` | `Checkbox` | `radix-ui` Checkbox |
-| `command.tsx` | `Command`, `CommandDialog`, `CommandInput`, `CommandList`, `CommandEmpty`, `CommandGroup`, `CommandItem`, `CommandShortcut`, `CommandSeparator` | `cmdk` CommandPrimitive |
-| `dialog.tsx` | `Dialog`, `DialogTrigger`, `DialogPortal`, `DialogClose`, `DialogOverlay`, `DialogContent`, `DialogHeader`, `DialogFooter`, `DialogTitle`, `DialogDescription` | `radix-ui` Dialog |
-| `input.tsx` | `Input` | plain `input` |
-| `label.tsx` | `Label` | `radix-ui` Label |
-| `popover.tsx` | `Popover`, `PopoverTrigger`, `PopoverContent`, `PopoverAnchor`, `PopoverHeader`, `PopoverTitle`, `PopoverDescription` | `radix-ui` Popover |
-| `scroll-area.tsx` | `ScrollArea`, `ScrollBar` | `radix-ui` ScrollArea |
-| `separator.tsx` | `Separator` | `radix-ui` Separator |
-| `tabs.tsx` | `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`, `tabsListVariants` | `radix-ui` Tabs |
-| `toggle.tsx` | `Toggle`, `toggleVariants` | `radix-ui` Toggle |
-| `toggle-group.tsx` | `ToggleGroup`, `ToggleGroupItem`, `ToggleGroupContext` | `radix-ui` ToggleGroup |
-| `tooltip.tsx` | `Tooltip`, `TooltipTrigger`, `TooltipContent`, `TooltipProvider` | `radix-ui` Tooltip |
-
-**Depends on:** `src/lib/utils.ts` (`cn`), `class-variance-authority`, `radix-ui`, `cmdk`, `react-day-picker`, `lucide-react`.
+**Depends on:** `next/server` (`NextResponse`).
+**Depended on by:** `src/app/api/gong/connect/route.ts`, `src/app/api/gong/calls/route.ts`, `src/app/api/gong/transcripts/route.ts`.
 
 ---
 
 ### `src/lib/utils.ts`
-**Purpose:** Single utility export: `cn(...inputs)`, which merges Tailwind class strings using `clsx` + `tailwind-merge`.
+
+Single utility `cn` that merges Tailwind class strings using `clsx` and `tailwind-merge`.
 
 **Key exports:** `cn`.
+**Depended on by:** All 15 `src/components/ui/` components.
 
-**Depends on:** `clsx`, `tailwind-merge`.
+---
+
+### `src/components/ui/` (15 components)
+
+shadcn/ui component primitives. All are styled wrappers over Radix UI primitives (via `radix-ui` package) or `cmdk`, using Tailwind classes and `class-variance-authority` for variant handling. No application-specific logic.
+
+| File | Primitive / Library | Key exports |
+|---|---|---|
+| `badge.tsx` | `radix-ui` Slot | `Badge`, `badgeVariants` |
+| `button.tsx` | `radix-ui` Slot | `Button`, `buttonVariants` |
+| `calendar.tsx` | `react-day-picker` DayPicker | `Calendar`, `CalendarDayButton` |
+| `card.tsx` | HTML `div` | `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter` |
+| `checkbox.tsx` | `radix-ui` Checkbox | `Checkbox` |
+| `command.tsx` | `cmdk` Command | `Command`, `CommandDialog`, `CommandInput`, `CommandList`, `CommandEmpty`, `CommandGroup`, `CommandItem`, `CommandShortcut`, `CommandSeparator` |
+| `dialog.tsx` | `radix-ui` Dialog | `Dialog`, `DialogClose`, `DialogContent`, `DialogDescription`, `DialogFooter`, `DialogHeader`, `DialogOverlay`, `DialogPortal`, `DialogTitle`, `DialogTrigger` |
+| `input.tsx` | HTML `input` | `Input` |
+| `label.tsx` | `radix-ui` Label | `Label` |
+| `popover.tsx` | `radix-ui` Popover | `Popover`, `PopoverTrigger`, `PopoverContent`, `PopoverAnchor`, `PopoverHeader`, `PopoverTitle`, `PopoverDescription` |
+| `scroll-area.tsx` | `radix-ui` ScrollArea | `ScrollArea`, `ScrollBar` |
+| `separator.tsx` | `radix-ui` Separator | `Separator` |
+| `tabs.tsx` | `radix-ui` Tabs | `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`, `tabsListVariants` |
+| `toggle.tsx` | `radix-ui` Toggle | `Toggle`, `toggleVariants` |
+| `toggle-group.tsx` | `radix-ui` ToggleGroup | `ToggleGroup`, `ToggleGroupItem` |
+| `tooltip.tsx` | `radix-ui` Tooltip | `Tooltip`, `TooltipTrigger`, `TooltipContent`, `TooltipProvider` |
+
+**Depends on:** `src/lib/utils.ts` (`cn`), `class-variance-authority`, `radix-ui`, `cmdk`, `lucide-react`, `react-day-picker`.
+**Internal cross-dependencies:** `command.tsx` imports `dialog.tsx`; `toggle-group.tsx` imports `toggle.tsx`; `calendar.tsx` imports `button.tsx`.
+
+---
+
+### `src/app/layout.tsx` — `RootLayout`
+
+Root Next.js layout. Loads Geist Sans and Geist Mono via `next/font/google`, applies font CSS variables to `<body>`, and exports the `metadata` object that sets `<title>` and `<meta name="description">` for the entire app.
+
+**Key exports:** `RootLayout` (default), `metadata`.
+**Depends on:** `next/font/google`.
 
 ---
 
@@ -226,24 +221,23 @@ flowchart TD
 
 | Category | Technology | Version | Purpose |
 |---|---|---|---|
-| Framework | Next.js | 16.1.6 | App Router, API routes, middleware, SSR/CSR |
-| Language | TypeScript | ^5 | Static typing throughout |
-| UI Runtime | React | 19.2.3 | Component model |
-| UI Runtime | React DOM | 19.2.3 | Browser rendering |
+| Framework | Next.js | 16.1.6 | App Router, API routes, Edge middleware |
+| Language | TypeScript | ^5 | Static typing across all source files |
+| UI Runtime | React | 19.2.3 | Client components, hooks |
+| UI Runtime | React DOM | 19.2.3 | DOM rendering |
 | Styling | Tailwind CSS | ^4 | Utility-first CSS |
-| Styling | tw-animate-css | ^1.4.0 | Tailwind animation utilities |
+| Styling | tw-animate-css | ^1.4.0 | Tailwind-compatible animation utilities |
 | Styling | @tailwindcss/postcss | ^4 | PostCSS integration for Tailwind v4 |
-| Component Library | shadcn (CLI) | ^3.8.5 | Component scaffolding tool (dev only) |
+| Component Library | shadcn (CLI) | ^3.8.5 | Component scaffolding (devDependency only) |
 | Component Primitives | radix-ui | ^1.4.3 | Accessible headless UI primitives |
 | Component Primitives | cmdk | ^1.1.1 | Command palette primitive |
-| Component Primitives | react-day-picker | ^9.14.0 | Calendar/date picker |
+| Component Primitives | react-day-picker | ^9.14.0 | Calendar / date picker primitive |
 | Icons | lucide-react | ^0.575.0 | SVG icon set |
-| Styling Utilities | class-variance-authority | ^0.7.1 | Variant-based className composition |
-| Styling Utilities | clsx | ^2.1.1 | Conditional className merging |
-| Styling Utilities | tailwind-merge | ^3.5.0 | Tailwind class conflict resolution |
-| Date Utilities | date-fns | ^4.1.0 | Date formatting and arithmetic |
-| Testing | @playwright/test | ^1.58.2 | End-to-end browser tests |
-| Linting | ESLint | ^9 | Static analysis |
-| Linting | eslint-config-next | 16.1.6 | Next.js ESLint rules |
-| Fonts | Geist / Geist Mono | (next/font/google) | Variable fonts via Google Fonts |
-| Deployment | Vercel | — | Hosting and edge network |
+| Styling Utilities | class-variance-authority | ^0.7.1 | Component variant definitions |
+| Styling Utilities | clsx | ^2.1.1 | Conditional class merging |
+| Styling Utilities | tailwind-merge | ^3.5.0 | Tailwind class deduplication |
+| Date Utilities | date-fns | ^4.1.0 | Date formatting and arithmetic in `CallsPage` |
+| Testing | @playwright/test | ^1.58.2 | End-to-end browser testing |
+| Linting | ESLint | ^9 | Code quality |
+| Linting | eslint-config-next | 16.1.6 | Next.js ESLint rule set |
+| Deployment | Vercel | — | Hosting and CI/CD |

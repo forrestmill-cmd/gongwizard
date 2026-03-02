@@ -61,6 +61,7 @@ Stateless — no database, credentials in sessionStorage only.
 - `src/app/api/gong/transcripts/route.ts` — Proxy: batched transcript monologue fetch
 - `src/app/layout.tsx` — Root layout; loads Geist/Geist Mono fonts
 - `src/components/ui/` — 15 shadcn/ui primitives (Badge, Button, Calendar, Card, Checkbox, Command, Dialog, Input, Label, Popover, ScrollArea, Separator, Tabs, Toggle, ToggleGroup, Tooltip)
+- `src/lib/gong-api.ts` — Shared Gong API utilities (GongApiError, makeGongFetch, handleGongError, rate limit + batch constants)
 - `src/lib/utils.ts` — `cn()` utility (clsx + tailwind-merge)
 
 ## Environment Variables

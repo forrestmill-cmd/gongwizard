@@ -1,501 +1,378 @@
-# GongWizard Component Documentation
+# Component Tree
 
 ## 1. Page Structure
 
 ```mermaid
 graph TD
-  MW[middleware.ts] -->|checks gw-auth cookie| GATE[/gate]
-  MW -->|passes if authed| HOME[/]
-  MW -->|passes if authed| CALLS[/calls]
+    MW[middleware.ts<br/>Edge: gw-auth cookie check] --> GATE[/gate — GatePage]
+    MW --> ROOT[/ — ConnectPage]
+    MW --> CALLS[/calls — CallsPage]
+    MW -->|pass-through| API[/api/* — API Routes]
 
-  ROOT[src/app/layout.tsx\nRootLayout] --> HOME
-  ROOT --> CALLS
-  ROOT --> GATE
-
-  HOME["src/app/page.tsx\nConnectPage\n(Step 1: Enter Gong API keys)"]
-  CALLS["src/app/calls/page.tsx\nCallsPage\n(Step 2: Browse, filter, export)"]
-  GATE["src/app/gate/page.tsx\nGatePage\n(Site password gate)"]
-
-  HOME -->|POST /api/gong/connect| CONNECT_API[src/app/api/gong/connect/route.ts]
-  CALLS -->|POST /api/gong/calls| CALLS_API[src/app/api/gong/calls/route.ts]
-  CALLS -->|POST /api/gong/transcripts| TX_API[src/app/api/gong/transcripts/route.ts]
-  GATE -->|POST /api/auth| AUTH_API[src/app/api/auth/route.ts]
+    ROOT -.->|on success, router.push| CALLS
+    GATE -.->|on success, router.push| ROOT
 ```
+
+**Routing hierarchy:**
 
 | Route | File | Layout | Data Fetching |
 |---|---|---|---|
-| `/gate` | `src/app/gate/page.tsx` | `RootLayout` | Client — POST `/api/auth` on form submit |
-| `/` | `src/app/page.tsx` | `RootLayout` | Client — POST `/api/gong/connect` on form submit |
-| `/calls` | `src/app/calls/page.tsx` | `RootLayout` | Client — POST `/api/gong/calls` + POST `/api/gong/transcripts` on demand |
-| `/api/auth` | `src/app/api/auth/route.ts` | — | Server — validates `SITE_PASSWORD` env var, sets `gw-auth` cookie |
-| `/api/gong/connect` | `src/app/api/gong/connect/route.ts` | — | Server — proxies to Gong `/v2/users`, `/v2/settings/trackers`, `/v2/workspaces` |
-| `/api/gong/calls` | `src/app/api/gong/calls/route.ts` | — | Server — proxies to Gong `/v2/calls` then `/v2/calls/extensive` |
-| `/api/gong/transcripts` | `src/app/api/gong/transcripts/route.ts` | — | Server — proxies to Gong `/v2/calls/transcript` |
+| `/gate` | `src/app/gate/page.tsx` | `RootLayout` | Client — POST `/api/auth` |
+| `/` | `src/app/page.tsx` | `RootLayout` | Client — POST `/api/gong/connect` |
+| `/calls` | `src/app/calls/page.tsx` | `RootLayout` | Client — POST `/api/gong/calls`, POST `/api/gong/transcripts` |
+
+**Layout:** `src/app/layout.tsx` (`RootLayout`) — applied to all pages. Loads Geist and Geist Mono fonts, sets `<html lang="en">`, renders `{children}`.
+
+**Middleware:** `src/middleware.ts` — runs at the Edge on every request matching `/((?!_next/static|_next/image|favicon.ico).*)`. Reads the `gw-auth` httpOnly cookie; redirects to `/gate` if absent. `/gate`, `/api/*`, `/_next/*`, and `/favicon` are exempted.
 
 ---
 
 ## 2. Component Hierarchy
 
-### `RootLayout` (`src/app/layout.tsx`)
-
+### RootLayout (`src/app/layout.tsx`)
 ```
 RootLayout
 └── <html lang="en">
-    └── <body> (Geist + Geist_Mono fonts)
-        └── {children}   ← page slot
+    └── <body> (Geist + Geist Mono font variables, antialiased)
+        └── {children}
 ```
 
-### `GatePage` (`src/app/gate/page.tsx`)
-
+### GatePage (`src/app/gate/page.tsx`)
 ```
 GatePage
 └── <div> (min-h-screen centered)
-    ├── <div> (heading block)
-    │   ├── <h1> GongWizard
-    │   └── <p> tagline
-    └── Card
-        ├── CardHeader
-        │   └── CardTitle "Enter Password"
-        └── CardContent
-            └── <form onSubmit={handleSubmit}>
-                ├── <div> (field group)
-                │   ├── Label (htmlFor="password")
-                │   └── <div> (relative wrapper)
-                │       ├── Input (type=password|text, id="password")
-                │       └── <button> (Eye / EyeOff toggle)
-                ├── <p> error message (conditional)
-                └── Button (type="submit", size="lg")
-                    └── Loader2 (animate-spin, conditional) | "Continue"
+    └── <div> (max-w-md)
+        ├── <h1> "GongWizard"
+        ├── <p> tagline
+        └── Card
+            ├── CardHeader
+            │   └── CardTitle "Enter Password"
+            └── CardContent
+                └── <form onSubmit={handleSubmit}>
+                    ├── <div> (password field group)
+                    │   ├── Label[htmlFor="password"]
+                    │   └── <div> (relative wrapper)
+                    │       ├── Input[id="password", type=password|text]
+                    │       └── <button> (toggle show/hide)
+                    │           └── Eye | EyeOff (lucide)
+                    ├── <p> error message (conditional)
+                    └── Button[type="submit", size="lg"]
+                        └── Loader2 (lucide, conditional) | "Continue"
 ```
 
-### `ConnectPage` (`src/app/page.tsx`)
-
+### ConnectPage (`src/app/page.tsx`)
 ```
 ConnectPage
 └── <div> (min-h-screen centered)
-    ├── <div> (heading block)
-    │   ├── <h1> GongWizard
-    │   └── <p> tagline
-    ├── Card
-    │   ├── CardHeader
-    │   │   └── CardTitle "Connect to Gong"
-    │   └── CardContent
-    │       └── <form onSubmit={handleConnect}>
-    │           ├── <div> (field group)
-    │           │   ├── Label (htmlFor="accessKey")
-    │           │   └── Input (type="text", id="accessKey")
-    │           ├── <div> (field group)
-    │           │   ├── Label (htmlFor="secretKey")
-    │           │   └── <div> (relative wrapper)
-    │           │       ├── Input (type=password|text, id="secretKey")
-    │           │       └── <button> (Eye / EyeOff toggle)
-    │           ├── <div> (collapsible help accordion)
-    │           │   ├── <button> "How to get these" (ChevronUp/Down)
-    │           │   └── <div> (steps list, conditional)
-    │           │       └── <ol> 4 steps
-    │           ├── <p> error message (conditional)
-    │           └── Button (type="submit", size="lg")
-    │               └── Loader2 (animate-spin, conditional) | "Connect"
-    └── <div> (security badges row)
-        ├── <span> Lock + "Credentials stored in session only"
-        ├── <span> X + "Cleared when you close this tab"
-        └── <span> Shield + "No server-side storage"
+    └── <div> (max-w-md)
+        ├── <h1> "GongWizard"
+        ├── <p> tagline
+        ├── Card
+        │   ├── CardHeader
+        │   │   └── CardTitle "Connect to Gong"
+        │   └── CardContent
+        │       └── <form onSubmit={handleConnect}>
+        │           ├── <div> Access Key field
+        │           │   ├── Label[htmlFor="accessKey"]
+        │           │   └── Input[id="accessKey", type="text"]
+        │           ├── <div> Secret Key field
+        │           │   ├── Label[htmlFor="secretKey"]
+        │           │   └── <div> (relative wrapper)
+        │           │       ├── Input[id="secretKey", type=password|text]
+        │           │       └── <button> (toggle show/hide)
+        │           │           └── Eye | EyeOff (lucide)
+        │           ├── <div> (collapsible help accordion)
+        │           │   ├── <button> "How to get these" + ChevronDown|ChevronUp
+        │           │   └── <div> (instructions, conditional on showHelp)
+        │           │       └── <ol> (4 steps)
+        │           ├── <p> error message (conditional)
+        │           └── Button[type="submit", size="lg"]
+        │               └── Loader2 | "Connect"
+        └── <div> (security trust badges)
+            ├── <span> Lock + "Credentials stored in session only"
+            ├── <span> X + "Cleared when you close this tab"
+            └── <span> Shield + "No server-side storage"
 ```
 
-### `CallsPage` (`src/app/calls/page.tsx`)
-
+### CallsPage (`src/app/calls/page.tsx`)
 ```
 CallsPage
-└── <div> (min-h-screen flex-col)
+└── <div> (min-h-screen flex flex-col)
     ├── <header> (sticky top bar)
-    │   ├── <span> "GongWizard" logo
-    │   ├── <div> (date range + workspace controls)
-    │   │   ├── Label + Input (id="fromDate", type="date")
-    │   │   ├── Label + Input (id="toDate", type="date")
-    │   │   ├── Label + <select> workspace (conditional: workspaces.length > 1)
-    │   │   └── Button "Load Calls" (Loader2 while loading)
-    │   └── Button (ghost) "Disconnect" (LogOut icon)
-    ├── <div> (3-column body)
-    │   ├── <aside> (left, 240px, hidden on mobile) — Filters panel
+    │   ├── <span> "GongWizard" brand
+    │   ├── <div> (controls row)
+    │   │   ├── Label + Input[type="date", id="fromDate"]
+    │   │   ├── Label + Input[type="date", id="toDate"]
+    │   │   ├── Label + <select> workspace (conditional: >1 workspace)
+    │   │   └── Button "Load Calls" (Loader2 when loading)
+    │   └── Button[variant="ghost"] "Disconnect" + LogOut icon
+    ├── <div> (3-column flex body)
+    │   ├── <aside> (left sidebar, hidden on mobile, w-[240px])
     │   │   ├── <h3> "Filters"
-    │   │   ├── Input (search, Search icon)
-    │   │   ├── Checkbox + Label "Exclude internal-only calls"
-    │   │   ├── <div> (tracker list, conditional: allTrackers.length > 0)
+    │   │   ├── <div> (search field)
+    │   │   │   ├── Search icon (lucide)
+    │   │   │   └── Input placeholder="Search calls..."
+    │   │   ├── <div> (internal-only toggle)
+    │   │   │   ├── Checkbox[id="excludeInternal"]
+    │   │   │   └── Label "Exclude internal-only calls"
+    │   │   ├── <div> (tracker filters, conditional: allTrackers.length > 0)
     │   │   │   ├── <h3> "Trackers"
-    │   │   │   └── {allTrackers.map} → Checkbox + Label + count badge
-    │   │   └── <div> (call counts, conditional: hasLoaded)
-    │   ├── <main> (flex-1) — Call list
-    │   │   ├── Input (mobile search, md:hidden)
-    │   │   ├── <div> Select All / Deselect All buttons (conditional)
-    │   │   ├── <div> error banner (conditional: loadError)
+    │   │   │   └── {allTrackers.map}
+    │   │   │       ├── Checkbox[id="tracker-{name}"]
+    │   │   │       ├── Label {tracker name}
+    │   │   │       └── <span> {count}
+    │   │   └── <div> (load stats, conditional: hasLoaded)
+    │   │       ├── <p> "{n} calls loaded"
+    │   │       └── <p> "{n} shown"
+    │   ├── <main> (center call list, flex-1, overflow-y-auto)
+    │   │   ├── <div> (mobile search, md:hidden)
+    │   │   │   ├── Search icon
+    │   │   │   └── Input placeholder="Search calls..."
+    │   │   ├── <div> (select-all bar, conditional: filteredCalls.length > 0)
+    │   │   │   ├── Button[variant="ghost", size="xs"] "Select All"
+    │   │   │   ├── Button[variant="ghost", size="xs"] "Deselect All"
+    │   │   │   └── <span> "{n} selected"
+    │   │   ├── <div> error banner (conditional: loadError) + AlertCircle icon
     │   │   ├── <div> loading spinner (conditional: loading)
     │   │   ├── <div> "No calls found" empty state (conditional)
     │   │   ├── <div> "No calls loaded yet" empty state (conditional)
-    │   │   └── {filteredCalls.map} → Card per call
-    │   │       └── CardContent
-    │   │           └── <div> (flex row)
-    │   │               ├── Checkbox (selected state)
-    │   │               └── <div> (call details)
-    │   │                   ├── title + date
-    │   │                   ├── duration, speaker counts, accountName
-    │   │                   ├── Badge[] topics (secondary variant)
-    │   │                   ├── Badge[] trackers (outline, blue)
-    │   │                   ├── brief (line-clamp-2, conditional)
-    │   │                   └── talk ratio bar (conditional)
-    │   └── <aside> (right, 280px, hidden on tablet) — Export panel
-    │       ├── empty state (conditional: selectedIds.size === 0)
-    │       └── export controls (conditional: selectedIds.size > 0)
-    │           ├── selection count + token estimate
-    │           ├── context window label (color-coded)
+    │   │   └── {filteredCalls.map} — one Card per call
+    │   │       └── Card (clickable, ring-2 when selected)
+    │   │           └── CardContent
+    │   │               └── <div> (flex row)
+    │   │                   ├── Checkbox (selection)
+    │   │                   └── <div> (call info)
+    │   │                       ├── <p> call.title + date
+    │   │                       ├── <div> duration / speaker counts / account
+    │   │                       ├── <div> topic/tracker badges (conditional)
+    │   │                       │   ├── Badge[variant="secondary"] per topic
+    │   │                       │   └── Badge[variant="outline"] per tracker
+    │   │                       ├── <p> call.brief (conditional, line-clamp-2)
+    │   │                       └── <div> talk ratio bar (conditional)
+    │   └── <aside> (right sidebar, hidden below lg, w-[280px])
+    │       ├── empty state "No calls selected" (conditional: selectedIds.size === 0)
+    │       └── export panel (conditional: selectedIds.size > 0)
+    │           ├── <p> "{n} calls selected"
+    │           ├── <p> "~{n} tokens estimated"
+    │           ├── <p> contextLabel (color-coded)
     │           ├── Separator
-    │           ├── Label "Format"
-    │           │   └── Tabs (markdown | xml | jsonl)
-    │           │       ├── TabsList
-    │           │       └── TabsTrigger × 3
+    │           ├── Label "Format" + Tabs (markdown / xml / jsonl)
+    │           │   └── TabsList
+    │           │       ├── TabsTrigger "Markdown"
+    │           │       ├── TabsTrigger "XML"
+    │           │       └── TabsTrigger "JSONL"
     │           ├── Label "Options"
-    │           │   └── {exportOpts keys.map} → Checkbox + Label
+    │           │   └── {exportOpts keys.map}
+    │           │       ├── Checkbox[id="opt-{key}"]
+    │           │       └── Label {label}
     │           ├── Separator
-    │           └── action buttons
-    │               ├── Button "Download" (Download icon)
-    │               └── Button "Copy to Clipboard" (Copy icon, ≤10 selected)
-    └── <div> (mobile export bar, lg:hidden, conditional: selectedIds.size > 0)
-        ├── <span> count + token estimate
-        └── Button "Export" (Download icon)
+    │           ├── Button "Download" (Loader2 when exporting)
+    │           ├── Button[variant="outline"] "Copy to Clipboard" (conditional: <= 10 selected)
+    │           └── <div> (select/deselect all mini-buttons)
+    └── <div> mobile export bar (lg:hidden, conditional: selectedIds.size > 0)
+        ├── <span> "{n} selected . ~{n} tokens"
+        └── Button "Export" (Loader2 | Download icon)
 ```
 
 ---
 
 ## 3. Component Reference
 
-### `GatePage`
+### GatePage
 **File:** `src/app/gate/page.tsx`
 
-**Props:** none (page component)
+**Props:** none (Next.js page)
 
-**State managed:**
-| State | Type | Purpose |
-|---|---|---|
-| `password` | `string` | Controlled input value |
-| `showPassword` | `boolean` | Toggle password visibility |
-| `loading` | `boolean` | Submit in-flight |
-| `error` | `string` | Error message display |
-
-**Hooks used:**
-- `useState` (4×)
-- `useRouter` (next/navigation) — redirect to `/` on success
+**Hooks:**
+- `useState` — `password: string`, `showPassword: boolean`, `loading: boolean`, `error: string`
+- `useRouter` (next/navigation)
 
 **API calls:**
-- `POST /api/auth` — sends `{ password }`, receives `{ ok: true }` or `{ error }`, sets `gw-auth` cookie server-side
+- `POST /api/auth` — body `{ password }` — on success sets `gw-auth` cookie server-side; client calls `router.push('/')`
 
-**Children rendered:** `Card`, `CardHeader`, `CardTitle`, `CardContent`, `Input`, `Label`, `Button`, `Eye`, `EyeOff`, `Loader2` (lucide-react)
+**State managed:**
+- Password field value and visibility toggle
+- Submission loading and error message
 
 ---
 
-### `ConnectPage`
+### ConnectPage
 **File:** `src/app/page.tsx`
 
-**Props:** none (page component)
+**Props:** none (Next.js page)
 
-**State managed:**
-| State | Type | Purpose |
-|---|---|---|
-| `accessKey` | `string` | Gong access key input |
-| `secretKey` | `string` | Gong secret key input |
-| `showSecret` | `boolean` | Toggle secret visibility |
-| `showHelp` | `boolean` | Toggle help accordion |
-| `loading` | `boolean` | Submit in-flight |
-| `error` | `string` | Error message display |
-
-**Hooks used:**
-- `useState` (6×)
-- `useRouter` (next/navigation) — push to `/calls` on success
+**Hooks:**
+- `useState` — `accessKey: string`, `secretKey: string`, `showSecret: boolean`, `showHelp: boolean`, `loading: boolean`, `error: string`
+- `useRouter` (next/navigation)
 
 **API calls:**
-- `POST /api/gong/connect` with `X-Gong-Auth: btoa(accessKey:secretKey)` — receives `{ users, trackers, workspaces, internalDomains, baseUrl }`
+- `POST /api/gong/connect` — headers `{ X-Gong-Auth: btoa(accessKey:secretKey) }` — returns `{ users, trackers, workspaces, internalDomains, baseUrl }`
+
+**State managed:**
+- API credential field values and visibility
+- Help accordion open/closed
+- Submission loading and error message
 
 **Side effects:**
-- `saveSession({ ...data, authHeader })` — writes connection data to `sessionStorage` under key `gongwizard_session`
+- On successful connect: calls `saveSession({ ...data, authHeader })` writing to `sessionStorage['gongwizard_session']`, then `router.push('/calls')`
 
-**Utility functions (file-local):**
-- `saveSession(data: any)` — serializes to `sessionStorage`
-
-**Children rendered:** `Card`, `CardHeader`, `CardTitle`, `CardContent`, `Input`, `Label`, `Button`, `Eye`, `EyeOff`, `ChevronDown`, `ChevronUp`, `Lock`, `X`, `Shield`, `Loader2` (lucide-react)
+**Helper (module-level):** `saveSession(data)` — writes to `sessionStorage['gongwizard_session']`
 
 ---
 
-### `CallsPage`
+### CallsPage
 **File:** `src/app/calls/page.tsx`
 
-**Props:** none (page component)
+**Props:** none (Next.js page)
+
+**Hooks:**
+- `useState` — 16 state variables (see table below)
+- `useEffect` — reads session from `sessionStorage` on mount; redirects to `/` if absent
+- `useMemo` — `allTrackers`, `filteredCalls`, `trackerCounts`, `selectedCalls`, `tokenEstimate`
+- `useRouter` (next/navigation)
 
 **State managed:**
-| State | Type | Initial Value |
-|---|---|---|
-| `session` | `any \| null` | `null` — populated from `sessionStorage` |
-| `fromDate` | `string` | 30 days ago (`yyyy-MM-dd`) |
-| `toDate` | `string` | today (`yyyy-MM-dd`) |
-| `calls` | `GongCall[]` | `[]` |
-| `loading` | `boolean` | `false` |
-| `loadError` | `string` | `''` |
-| `hasLoaded` | `boolean` | `false` |
-| `selectedIds` | `Set<string>` | empty Set |
-| `searchText` | `string` | `''` |
-| `excludeInternal` | `boolean` | `false` |
-| `activeTrackers` | `Set<string>` | empty Set |
-| `workspaceId` | `string` | `''` |
-| `exportFormat` | `'markdown' \| 'xml' \| 'jsonl'` | `'markdown'` |
-| `exportOpts` | `ExportOptions` | all `true` |
-| `exporting` | `boolean` | `false` |
-| `copied` | `boolean` | `false` |
 
-**Hooks used:**
-- `useState` (14×)
-- `useEffect` — reads `sessionStorage` on mount, redirects to `/` if no session
-- `useMemo` — `allTrackers`, `filteredCalls`, `trackerCounts`, `selectedCalls`, `tokenEstimate`
-- `useRouter` (next/navigation) — `router.replace('/')` on session miss or disconnect
+| State variable | Type | Purpose |
+|---|---|---|
+| `session` | `any \| null` | Deserialized `gongwizard_session` from sessionStorage |
+| `fromDate` | `string` | Date range start (default: 30 days ago, `yyyy-MM-dd`) |
+| `toDate` | `string` | Date range end (default: today) |
+| `calls` | `GongCall[]` | Raw call list from API |
+| `loading` | `boolean` | Calls fetch in progress |
+| `loadError` | `string` | Error message from calls fetch |
+| `hasLoaded` | `boolean` | Whether calls have been fetched at least once |
+| `selectedIds` | `Set<string>` | IDs of checked calls |
+| `searchText` | `string` | Filter search query |
+| `excludeInternal` | `boolean` | Filter: hide calls with zero external speakers |
+| `activeTrackers` | `Set<string>` | Filter: required tracker names |
+| `workspaceId` | `string` | Gong workspace filter (blank = all) |
+| `exportFormat` | `'markdown' \| 'xml' \| 'jsonl'` | Selected export format |
+| `exportOpts` | `ExportOptions` | Export processing toggles |
+| `exporting` | `boolean` | Export/copy in progress |
+| `copied` | `boolean` | Clipboard copy success flash (2s) |
 
 **API calls:**
-- `POST /api/gong/calls` — fetches and normalizes call list
-- `POST /api/gong/transcripts` — fetches raw transcript monologues for selected call IDs
+- `POST /api/gong/calls` — headers `{ X-Gong-Auth }` — body `{ fromDate, toDate, baseUrl, workspaceId? }` — returns `{ calls }`
+- `POST /api/gong/transcripts` — headers `{ X-Gong-Auth }` — body `{ callIds, baseUrl }` — returns `{ transcripts }`
 
-**Key functions (file-local):**
+**Computed values (useMemo):**
 
-| Function | Signature | Purpose |
+| Name | Depends on | Purpose |
 |---|---|---|
-| `saveSession` | `(data: any) → void` | Writes to `sessionStorage` |
-| `getSession` | `() → any \| null` | Reads from `sessionStorage` |
-| `estimateTokens` | `(text: string) → number` | `ceil(len / 4)` |
-| `contextLabel` | `(tokens: number) → string` | Maps token count to LLM context label |
-| `contextColor` | `(tokens: number) → string` | Tailwind class for green/yellow/red |
-| `downloadFile` | `(content, filename, mimeType) → void` | Creates blob URL and triggers `<a>` click |
-| `formatDuration` | `(seconds: number) → string` | `Xh Ym` / `Xm Ys` / `Xs` |
-| `formatTimestamp` | `(ms: number) → string` | `M:SS` |
-| `groupTranscriptTurns` | `(sentences, speakerMap) → FormattedTurn[]` | Collapses sequential sentences by same speaker into turns |
-| `buildMarkdown` | `(calls, opts) → string` | Formats calls as Markdown |
-| `buildCallText` | `(call, opts) → string` | Single-call Markdown block |
-| `buildXML` | `(calls, opts) → string` | Formats calls as XML |
-| `buildJSONL` | `(calls, opts) → string` | Formats calls as JSONL (one JSON obj per line) |
-| `escapeXml` | `(str: string) → string` | XML entity escaping |
-| `filterFillerTurns` | `(turns) → FormattedTurn[]` | Removes short filler/greeting utterances |
-| `condenseInternalMonologues` | `(turns) → FormattedTurn[]` | Merges 3+ consecutive same-speaker internal turns |
-| `loadCalls` | `async () → void` | Fetches and processes calls from API |
-| `toggleSelect` | `(id: string) → void` | Toggles a call's selection |
-| `selectAll` | `() → void` | Selects all filtered calls |
-| `deselectAll` | `() → void` | Clears selection |
-| `toggleTracker` | `(name: string) → void` | Toggles a tracker filter |
-| `disconnect` | `() → void` | Clears session, redirects to `/` |
-| `fetchTranscriptsForSelected` | `async () → CallForExport[]` | Fetches transcripts and assembles `CallForExport` objects |
-| `handleExport` | `async () → void` | Triggers download in selected format |
-| `handleCopy` | `async () → void` | Copies formatted content to clipboard |
+| `allTrackers` | `session.trackers` | Flat list of tracker names |
+| `filteredCalls` | `calls, excludeInternal, searchText, activeTrackers` | Visible subset after all filters |
+| `trackerCounts` | `calls, allTrackers` | Count of calls per tracker name |
+| `selectedCalls` | `calls, selectedIds` | `GongCall[]` objects for selected IDs |
+| `tokenEstimate` | `selectedCalls` | Rough token count (duration * 130 words/min * 1.3 tokens/word) |
 
-**Types (file-local):**
+**Key functions:**
 
-```typescript
-interface Speaker {
-  speakerId: string;
-  name: string;
-  firstName: string;
-  isInternal: boolean;
-  title?: string;
-}
-
-interface TranscriptSentence {
-  speakerId: string;
-  text: string;
-  start: number;
-}
-
-interface FormattedTurn {
-  speakerId: string;
-  firstName: string;
-  isInternal: boolean;
-  timestamp: string;
-  text: string;
-}
-
-interface CallForExport {
-  id: string;
-  title: string;
-  date: string;
-  duration: number;
-  accountName: string;
-  speakers: Speaker[];
-  brief: string;
-  turns: FormattedTurn[];
-  interactionStats?: any;
-}
-
-interface GongCall {
-  id: string;
-  title: string;
-  started: string;
-  duration: number;
-  accountName?: string;
-  topics?: string[];
-  trackers?: string[];
-  brief?: string;
-  parties?: any[];
-  interactionStats?: any;
-  internalSpeakerCount: number;
-  externalSpeakerCount: number;
-  talkRatio?: number;
-}
-
-interface ExportOptions {
-  removeFillerGreetings: boolean;
-  condenseMonologues: boolean;
-  includeMetadata: boolean;
-  includeAIBrief: boolean;
-  includeInteractionStats: boolean;
-}
-```
-
-**Children rendered:** `Button`, `Card`, `CardContent`, `CardHeader`, `CardTitle`, `Input`, `Label`, `Badge`, `Checkbox`, `Separator`, `ScrollArea` (imported but not used in JSX), `Tabs`, `TabsList`, `TabsTrigger`, `Loader2`, `Download`, `Copy`, `LogOut`, `Search`, `CheckSquare`, `Square`, `AlertCircle` (lucide-react)
-
----
-
-### API Routes (server-only, no React)
-
-#### `POST /api/auth`
-**File:** `src/app/api/auth/route.ts`
-
-Validates `{ password }` against `process.env.SITE_PASSWORD`. On match, sets an `httpOnly` cookie `gw-auth=1` (7-day TTL) and returns `{ ok: true }`.
-
-#### `POST /api/gong/connect`
-**File:** `src/app/api/gong/connect/route.ts`
-
-**Request headers:** `X-Gong-Auth` (Base64 `accessKey:secretKey`)
-
-**Request body:** `{ baseUrl? }`
-
-Calls Gong in parallel:
-- `GET /v2/users` (paginated) → extract `internalDomains` from email addresses
-- `GET /v2/settings/trackers` (paginated)
-- `GET /v2/workspaces`
-
-**Response:** `{ users, trackers, workspaces, internalDomains, baseUrl, warnings? }`
-
-Local class: `GongApiError(status, message, endpoint)` — re-thrown as structured HTTP errors.
-
-Local function: `fetchAllPages<T>(endpoint, dataKey, method?, body?)` — handles cursor-based pagination with 350ms delay between pages.
-
-#### `POST /api/gong/calls`
-**File:** `src/app/api/gong/calls/route.ts`
-
-**Request headers:** `X-Gong-Auth`
-
-**Request body:** `{ fromDate, toDate, baseUrl?, workspaceId? }`
-
-Pipeline:
-1. Paginated `GET /v2/calls?fromDateTime=...&toDateTime=...` → collects all call IDs
-2. Batched (10 at a time) `POST /v2/calls/extensive` with full `contentSelector` → extensive call data
-3. On 403, falls back to basic call shape
-
-**Response:** `{ calls: NormalizedCall[] }` where each call has `id, title, started, duration, url, direction, parties, topics, trackers, brief, keyPoints, actionItems, interactionStats, context, accountName, accountIndustry, accountWebsite`.
-
-Local function: `extractFieldValues(context, fieldName, objectType?)` — navigates Gong's `context.objects.fields` nested structure (ported from Python v1).
-
-#### `POST /api/gong/transcripts`
-**File:** `src/app/api/gong/transcripts/route.ts`
-
-**Request headers:** `X-Gong-Auth`
-
-**Request body:** `{ callIds: string[], baseUrl? }`
-
-Batches call IDs in groups of 50, calls `POST /v2/calls/transcript` for each batch with cursor pagination. Assembles a `transcriptMap` keyed by `callId`.
-
-**Response:** `{ transcripts: Array<{ callId: string, transcript: Monologue[] }> }`
+| Function | Purpose |
+|---|---|
+| `loadCalls()` | Fetches call list; classifies speakers via `isInternalParty`; builds `GongCall[]` |
+| `fetchTranscriptsForSelected()` | Fetches monologues; builds speaker maps; calls `groupTranscriptTurns`; returns `CallForExport[]` |
+| `handleExport()` | Calls `fetchTranscriptsForSelected`, builds content via `buildExportContent`, triggers `downloadFile` |
+| `handleCopy()` | Calls `fetchTranscriptsForSelected`, builds content, writes to `navigator.clipboard` |
+| `toggleSelect(id)` | Adds/removes ID from `selectedIds` |
+| `selectAll()` | Sets `selectedIds` to all `filteredCalls` IDs |
+| `deselectAll()` | Clears `selectedIds` |
+| `toggleTracker(name)` | Adds/removes tracker name from `activeTrackers` |
+| `disconnect()` | Removes `gongwizard_session` from sessionStorage, redirects to `/` |
 
 ---
 
 ## 4. Custom Hooks
 
-No files in a `hooks/` directory are present in the current codebase snapshot. The CLAUDE.md references `src/hooks/useGong` and `src/hooks/useCalls`, but these are not yet in the repomix output — they may be planned or not yet committed.
+There are no files in a dedicated `hooks/` directory. All stateful logic lives inline in the page components. The session helpers are module-level utility functions shared across pages:
 
-All hook logic currently lives inline in `CallsPage`:
-- Session read/write via `useEffect` + `getSession()`/`saveSession()`
-- Filtering via `useMemo` (`filteredCalls`, `trackerCounts`, `selectedCalls`, `tokenEstimate`)
-- API fetch via async event handlers (`loadCalls`, `fetchTranscriptsForSelected`)
+### `saveSession(data)` / `getSession()`
+**Files:** `src/app/page.tsx` (saveSession only), `src/app/calls/page.tsx` (both)
+
+**Purpose:** Read and write the `gongwizard_session` key in `sessionStorage`. The session object shape: `{ authHeader: string, users: any[], trackers: any[], workspaces: any[], internalDomains: string[], baseUrl: string }`.
+
+**Parameters:**
+- `saveSession(data: any)` — no return value
+- `getSession()` — returns `any | null`
+
+**Side effects:** `sessionStorage` access — only safe in client components (`'use client'`)
+
+**Used by:** `ConnectPage` (write on connect success), `CallsPage` (read on mount, re-save not currently done)
 
 ---
 
-## 5. UI Library Notes
+## 5. Pure Utility Functions (module-level in `src/app/calls/page.tsx`)
 
-**Library:** shadcn/ui (component generation via `shadcn` CLI v3.8.5)
+These are not hooks but contain all the business logic for transcript processing and export formatting:
 
-**Primitives package:** `radix-ui` v1.4.3 (the unified `radix-ui` package — imports like `import { Checkbox as CheckboxPrimitive } from "radix-ui"`)
-
-**Icon library:** `lucide-react` v0.575.0
-
-**Styling:** Tailwind CSS v4 with `tw-animate-css` for data-attribute-driven animations. No `tailwind.config.js` — Tailwind v4 uses CSS-based config.
-
-**Date utilities:** `date-fns` v4.1.0 (`format`, `subDays`)
-
-**Calendar/date picker:** `react-day-picker` v9.14.0 (used only in `Calendar` component; not yet wired to any page)
-
-**Command palette:** `cmdk` v1.1.1 (used only in `Command` component; not yet wired to any page)
-
-**Fonts:** `next/font/google` — Geist (variable: `--font-geist-sans`) + Geist_Mono (variable: `--font-geist-mono`), applied to `<body>` in `RootLayout`.
-
-**Utility function:** `src/lib/utils.ts` exports `cn(...inputs: ClassValue[])` — `twMerge(clsx(inputs))` pattern.
-
-### Installed shadcn Components
-
-| Component | File | Primitive |
+| Function | Signature | Purpose |
 |---|---|---|
-| `Badge` | `src/components/ui/badge.tsx` | `Slot` from `radix-ui`, `cva` variants: default, secondary, destructive, outline, ghost, link |
-| `Button` | `src/components/ui/button.tsx` | `Slot` from `radix-ui`, `cva` variants: default, destructive, outline, secondary, ghost, link; sizes: default, xs, sm, lg, icon, icon-xs, icon-sm, icon-lg |
-| `Calendar` | `src/components/ui/calendar.tsx` | `DayPicker` from `react-day-picker`; includes `CalendarDayButton` sub-component |
-| `Card` | `src/components/ui/card.tsx` | Plain divs; exports `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter` |
-| `Checkbox` | `src/components/ui/checkbox.tsx` | `Checkbox` from `radix-ui` |
-| `Command` | `src/components/ui/command.tsx` | `Command` from `cmdk`; exports `Command`, `CommandDialog`, `CommandInput`, `CommandList`, `CommandEmpty`, `CommandGroup`, `CommandItem`, `CommandShortcut`, `CommandSeparator` |
-| `Dialog` | `src/components/ui/dialog.tsx` | `Dialog` from `radix-ui`; exports `Dialog`, `DialogTrigger`, `DialogPortal`, `DialogOverlay`, `DialogContent`, `DialogHeader`, `DialogFooter`, `DialogTitle`, `DialogDescription`, `DialogClose` |
-| `Input` | `src/components/ui/input.tsx` | Plain `<input>` |
-| `Label` | `src/components/ui/label.tsx` | `Label` from `radix-ui` |
-| `Popover` | `src/components/ui/popover.tsx` | `Popover` from `radix-ui`; exports `Popover`, `PopoverTrigger`, `PopoverContent`, `PopoverAnchor`, `PopoverHeader`, `PopoverTitle`, `PopoverDescription` |
-| `ScrollArea` | `src/components/ui/scroll-area.tsx` | `ScrollArea` from `radix-ui`; exports `ScrollArea`, `ScrollBar` |
-| `Separator` | `src/components/ui/separator.tsx` | `Separator` from `radix-ui` |
-| `Tabs` | `src/components/ui/tabs.tsx` | `Tabs` from `radix-ui`; exports `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`; `tabsListVariants` (default/line) |
-| `Toggle` | `src/components/ui/toggle.tsx` | `Toggle` from `radix-ui`; exports `Toggle`, `toggleVariants` |
-| `ToggleGroup` | `src/components/ui/toggle-group.tsx` | `ToggleGroup` from `radix-ui`; exports `ToggleGroup`, `ToggleGroupItem`; uses `ToggleGroupContext` for variant/size inheritance |
-| `Tooltip` | `src/components/ui/tooltip.tsx` | `Tooltip` from `radix-ui`; exports `Tooltip`, `TooltipTrigger`, `TooltipContent`, `TooltipProvider` |
+| `estimateTokens(text)` | `(string) => number` | `Math.ceil(text.length / 4)` — GPT tokenizer heuristic |
+| `contextLabel(tokens)` | `(number) => string` | Maps token count to context window label (GPT-3.5 to Claude 200K) |
+| `contextColor(tokens)` | `(number) => string` | Tailwind color class: green < 32K, yellow < 128K, red >= 128K |
+| `formatDuration(seconds)` | `(number) => string` | Formats as `Xh Ym`, `Xm Ys`, or `Xs` |
+| `isInternalParty(party, domains)` | `(any, string[]) => boolean` | `party.affiliation === 'Internal'` with email domain fallback |
+| `formatTimestamp(ms)` | `(number) => string` | Milliseconds to `m:ss` display string |
+| `groupTranscriptTurns(sentences, speakerMap)` | `(TranscriptSentence[], Map<string, Speaker>) => FormattedTurn[]` | Groups consecutive same-speaker sentences into single turn objects |
+| `filterFillerTurns(turns)` | `(FormattedTurn[]) => FormattedTurn[]` | Drops turns < 5 chars or matching `FILLER_PATTERNS` regex list |
+| `condenseInternalMonologues(turns)` | `(FormattedTurn[]) => FormattedTurn[]` | Merges runs of 3+ consecutive same-speaker internal turns into one |
+| `buildMarkdown(calls, opts)` | `(CallForExport[], ExportOptions) => string` | Full Markdown export with header, token count, and per-call sections |
+| `buildCallText(call, opts)` | `(CallForExport, ExportOptions) => string` | Single call as Markdown (calls `filterFillerTurns`, `condenseInternalMonologues`) |
+| `buildXML(calls, opts)` | `(CallForExport[], ExportOptions) => string` | Full XML export; external speaker text uppercased |
+| `buildJSONL(calls, opts)` | `(CallForExport[], ExportOptions) => string` | One JSON object per call, newline-separated |
+| `buildExportContent(calls, format, opts)` | `(CallForExport[], 'markdown'\|'xml'\|'jsonl', ExportOptions) => { content, extension, mimeType }` | Dispatcher routing to markdown/xml/jsonl builder |
+| `escapeXml(str)` | `(string) => string` | Escapes `& < > " '` for safe XML embedding |
+| `downloadFile(content, filename, mimeType)` | `(string, string, string) => void` | Creates Blob URL, attaches to `<a>`, clicks it, revokes URL |
 
-### Components Used vs. Installed
-
-Components actively used in pages: `Badge`, `Button`, `Card`/`CardContent`/`CardHeader`/`CardTitle`, `Checkbox`, `Input`, `Label`, `Separator`, `Tabs`/`TabsList`/`TabsTrigger`
-
-Components installed but not yet wired to any page: `Calendar`, `Command`, `Dialog`, `Popover`, `ScrollArea` (imported in `CallsPage` but not rendered), `Toggle`, `ToggleGroup`, `Tooltip`
+**Constants:**
+- `FILLER_PATTERNS` — array of regex patterns matching social filler utterances (hi, hello, thanks, yes, ok, etc.)
 
 ---
 
-## 6. Auth & Session Flow
+## 6. TypeScript Interfaces (declared in `src/app/calls/page.tsx`)
 
-```mermaid
-sequenceDiagram
-  participant Browser
-  participant Middleware
-  participant GatePage
-  participant ConnectPage
-  participant CallsPage
-  participant API
+| Interface | Fields |
+|---|---|
+| `Speaker` | `speakerId: string, name: string, firstName: string, isInternal: boolean, title?: string` |
+| `TranscriptSentence` | `speakerId: string, text: string, start: number` |
+| `FormattedTurn` | `speakerId: string, firstName: string, isInternal: boolean, timestamp: string, text: string` |
+| `CallForExport` | `id: string, title: string, date: string, duration: number, accountName: string, speakers: Speaker[], brief: string, turns: FormattedTurn[], interactionStats?: any` |
+| `GongCall` | `id: string, title: string, started: string, duration: number, accountName?: string, topics?: string[], trackers?: string[], brief?: string, parties?: any[], interactionStats?: any, internalSpeakerCount: number, externalSpeakerCount: number, talkRatio?: number` |
+| `ExportOptions` | `removeFillerGreetings: boolean, condenseMonologues: boolean, includeMetadata: boolean, includeAIBrief: boolean, includeInteractionStats: boolean` |
 
-  Browser->>Middleware: Any request
-  Middleware-->>Browser: Redirect /gate (no gw-auth cookie)
-  Browser->>GatePage: Enter site password
-  GatePage->>API: POST /api/auth {password}
-  API-->>Browser: Set-Cookie: gw-auth=1 (httpOnly, 7d)
-  Browser->>ConnectPage: / (gw-auth cookie present)
-  ConnectPage->>API: POST /api/gong/connect (X-Gong-Auth header)
-  API-->>ConnectPage: {users, trackers, workspaces, internalDomains}
-  ConnectPage->>Browser: sessionStorage.gongwizard_session = {...data, authHeader}
-  Browser->>CallsPage: /calls
-  CallsPage->>API: POST /api/gong/calls (X-Gong-Auth)
-  API-->>CallsPage: {calls[]}
-  CallsPage->>API: POST /api/gong/transcripts (X-Gong-Auth, on export)
-  API-->>CallsPage: {transcripts[]}
-```
+---
 
-**Key security properties:**
-- `gw-auth` cookie is `httpOnly` — cannot be read by JS
-- Gong credentials (`X-Gong-Auth`) live only in `sessionStorage` — cleared on tab close, never sent to any server-side storage
-- All Gong API calls are proxied through Next.js API routes — credentials never touch Gong directly from the browser
+## 7. UI Library Notes
+
+**Library:** shadcn/ui (v3.x, installed as `shadcn` devDependency)
+
+**Primitive layer:** `radix-ui` v1.4.3 (consolidated package — Checkbox, Dialog, Label, Popover, ScrollArea, Separator, Tabs, Toggle, ToggleGroup, Tooltip all imported from `"radix-ui"`)
+
+**Styling:** Tailwind CSS v4 + `tw-animate-css` for enter/exit animations. Class composition uses `class-variance-authority` (cva) for variant logic and `clsx` + `tailwind-merge` via `cn()` from `src/lib/utils.ts`.
+
+**Components installed** (`src/components/ui/`):
+
+| Component | Primitives used | Variants / notes |
+|---|---|---|
+| `Badge` | `radix-ui` Slot | `default, secondary, destructive, outline, ghost, link` |
+| `Button` | `radix-ui` Slot | variants: `default, destructive, outline, secondary, ghost, link`; sizes: `default, xs, sm, lg, icon, icon-xs, icon-sm, icon-lg` |
+| `Calendar` | `react-day-picker` DayPicker | Custom `CalendarDayButton` sub-component; supports range selection, dropdown caption |
+| `Card` | none (plain divs) | Sub-components: `Card, CardHeader, CardTitle, CardDescription, CardAction, CardContent, CardFooter` |
+| `Checkbox` | `radix-ui` Checkbox | CheckIcon from lucide |
+| `Command` | `cmdk` CommandPrimitive | Sub-components: `Command, CommandDialog, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandSeparator, CommandShortcut` |
+| `Dialog` | `radix-ui` Dialog | `showCloseButton?: boolean` prop on `DialogContent` and `DialogFooter`; sub-components: `Dialog, DialogTrigger, DialogPortal, DialogOverlay, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription, DialogClose` |
+| `Input` | none (native `<input>`) | Single variant; passes all native input props |
+| `Label` | `radix-ui` Label | |
+| `Popover` | `radix-ui` Popover | Sub-components: `Popover, PopoverTrigger, PopoverContent, PopoverAnchor, PopoverHeader, PopoverTitle, PopoverDescription` |
+| `ScrollArea` | `radix-ui` ScrollArea | Includes `ScrollBar` sub-component (vertical/horizontal) |
+| `Separator` | `radix-ui` Separator | horizontal / vertical orientation |
+| `Tabs` | `radix-ui` Tabs | `tabsListVariants`: `default, line`; sub-components: `Tabs, TabsList, TabsTrigger, TabsContent` |
+| `Toggle` | `radix-ui` Toggle | variants: `default, outline`; sizes: `default, sm, lg`; exports `toggleVariants` for reuse |
+| `ToggleGroup` | `radix-ui` ToggleGroup | Uses `ToggleGroupContext` to propagate variant/size to `ToggleGroupItem`; `spacing` prop controls gap |
+| `Tooltip` | `radix-ui` Tooltip | `delayDuration` defaults to 0; sub-components: `TooltipProvider, Tooltip, TooltipTrigger, TooltipContent` |
+
+**Icons:** `lucide-react` v0.575.0 — used throughout pages and primitives. No custom icon components.
+
+**Fonts:** Geist Sans (`--font-geist-sans`) and Geist Mono (`--font-geist-mono`) loaded via `next/font/google` in `RootLayout`.
+
+**Theme tokens:** Defined via CSS custom properties (Tailwind v4 config-less approach). Tokens follow shadcn conventions: `--background`, `--foreground`, `--primary`, `--muted`, `--destructive`, `--border`, `--ring`, `--accent`, `--popover`, `--card`, etc. Dark mode supported via `dark:` variants throughout all primitive components.
