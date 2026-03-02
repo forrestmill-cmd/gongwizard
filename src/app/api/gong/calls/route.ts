@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GongApiError, sleep, makeGongFetch, handleGongError, GONG_RATE_LIMIT_MS, EXTENSIVE_BATCH_SIZE } from '@/lib/gong-api';
 
-const MAX_DATE_RANGE_DAYS = 365;
-const CHUNK_DAYS = 30;
+const MAX_DATE_RANGE_DAYS = 365; // Cap to prevent accidental multi-year queries
+const CHUNK_DAYS = 30; // Gong API performs best with ≤30-day windows
 
 // Extract values from Gong's nested context.objects.fields structure
 function extractFieldValues(

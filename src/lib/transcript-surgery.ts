@@ -49,11 +49,13 @@ function isFiller(text: string): boolean {
   return FILLER_PATTERNS.some(p => p.test(trimmed));
 }
 
+const GREETING_CLOSING_WINDOW_MS = 60_000; // First/last 60s of call = greeting/closing zone
+
 function isGreetingOrClosing(timestampMs: number, callDurationMs: number, text: string): boolean {
   const wordCount = text.split(/\s+/).length;
   if (wordCount >= 15) return false;
   // First or last 60 seconds
-  return timestampMs < 60000 || timestampMs > (callDurationMs - 60000);
+  return timestampMs < GREETING_CLOSING_WINDOW_MS || timestampMs > (callDurationMs - GREETING_CLOSING_WINDOW_MS);
 }
 
 // ─── Timestamp formatting ───────────────────────────────────────────────────
@@ -117,6 +119,7 @@ function enrichContext(
   const prevLabel = prev.isInternal ? 'internal' : 'external';
   const prevText = prev.text;
 
+  // ≤10 words = short utterance, reach back for more context (ported from v2)
   if (index > 1 && prevText.split(/\s+/).length < 11) {
     const prevPrev = utterances[index - 2];
     const ppLabel = prevPrev.isInternal ? 'internal' : 'external';

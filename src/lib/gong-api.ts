@@ -57,6 +57,7 @@ export function makeGongFetch(baseUrl: string, authHeader: string) {
 
         const text = await response.text().catch(() => '');
         lastError = new GongApiError(response.status, text, endpoint);
+        // Exponential backoff: 2s, 4s, 8s, 16s, 30s (capped)
         const delayMs = Math.min(2 ** attempt * 2, 30) * 1000;
         console.warn(`Gong API error ${response.status} on ${endpoint}, attempt ${attempt + 1}/${MAX_RETRIES}, retrying in ${delayMs}ms`);
         await sleep(delayMs);

@@ -81,6 +81,7 @@ export function alignTrackersToUtterances(
     const ts = occ.startTimeMs;
 
     // Step 1: Exact containment
+    // Skip utterances with unset/zero timestamps (0 = missing, not "start of call")
     let eligible: Array<[Utterance, number]> = utterances
       .filter(u => u.startTimeMs > 0 && u.startTimeMs <= ts && ts <= u.endTimeMs)
       .map(u => [u, Math.abs(ts - u.midTimeMs)]);

@@ -14,7 +14,7 @@ export async function POST(request: Request) {
   const response = NextResponse.json({ ok: true });
   response.cookies.set('gw-auth', '1', {
     httpOnly: true,
-    maxAge: 60 * 60 * 24 * 7,
+    maxAge: 60 * 60 * 24 * 7, // 7 days
     path: '/',
     sameSite: 'lax',
   });
