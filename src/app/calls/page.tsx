@@ -34,6 +34,7 @@ function getSession(): any | null {
 
 // ─── Token estimation ───────────────────────────────────────────────────────
 
+// ~4 chars per token is a common English heuristic (GPT tokenizer average)
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
@@ -77,6 +78,7 @@ function formatDuration(seconds: number): string {
 }
 
 function isInternalParty(party: any, internalDomains: string[]): boolean {
+  // Gong's affiliation field is primary signal; domain match is fallback when affiliation is missing
   if (party.affiliation === 'Internal') return true;
   const email: string = party.emailAddress || '';
   const domain = email.includes('@') ? email.split('@')[1]?.toLowerCase() : '';
@@ -328,6 +330,7 @@ function escapeXml(str: string): string {
     .replace(/'/g, '&apos;');
 }
 
+// Matches short social fillers (greetings, acknowledgments) with optional trailing punctuation
 const FILLER_PATTERNS = [
   /^(hi|hello|hey|thanks|thank you|bye|goodbye|talk soon|have a great|sounds good|absolutely|of course|sure|yeah|yes|no|okay|ok|alright|right|great|perfect)[!.,\s]*$/i,
 ];
@@ -352,6 +355,7 @@ function condenseInternalMonologues(turns: FormattedTurn[]): FormattedTurn[] {
         group.push(turns[j]);
         j++;
       }
+      // Only condense runs of 3+ consecutive turns; short back-and-forth preserved
       if (group.length > 2) {
         const condensed: FormattedTurn = {
           ...turn,

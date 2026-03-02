@@ -6,6 +6,7 @@ export function middleware(request: NextRequest) {
 
   if (
     pathname.startsWith('/gate') ||
+    // /api/ excluded because API routes have their own auth (X-Gong-Auth header) and don't use cookies
     pathname.startsWith('/api/') ||
     pathname.startsWith('/_next/') ||
     pathname.startsWith('/favicon')

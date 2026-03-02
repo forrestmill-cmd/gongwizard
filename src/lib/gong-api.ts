@@ -15,7 +15,9 @@ export function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// Gong enforces ~3 req/s; 350ms keeps us safely under the limit
 export const GONG_RATE_LIMIT_MS = 350;
+// Gong API limits: /v2/calls/extensive accepts max 10 IDs, /v2/calls/transcript accepts max 50
 export const EXTENSIVE_BATCH_SIZE = 10;
 export const TRANSCRIPT_BATCH_SIZE = 50;
 
