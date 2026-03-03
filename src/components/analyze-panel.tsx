@@ -246,6 +246,15 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         }
         const speakerClassifier = (speakerId: string) => speakerInternalMap.get(speakerId) ?? true;
 
+        // Build speaker map for name/title resolution in transcript analysis
+        const speakerMap: Record<string, { name: string; title: string }> = {};
+        for (const p of parties) {
+          const id = p.speakerId || p.userId || p.id;
+          if (id && p.name) {
+            speakerMap[id] = { name: p.name, title: p.title || p.jobTitle || '' };
+          }
+        }
+
         // Build utterances + align trackers
         const utterances = buildUtterances(monologues, speakerClassifier);
         const trackerOccs = extractTrackerOccurrences(call.trackers || []);
@@ -257,7 +266,8 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
           utterances,
           call.outline || [],
           sc.relevantSections,
-          (call.duration || 0) * 1000
+          (call.duration || 0) * 1000,
+          speakerMap
         );
 
         // Smart truncation for long internal monologues

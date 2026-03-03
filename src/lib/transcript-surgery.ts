@@ -22,6 +22,9 @@ export interface SurgicalExcerpt {
   sectionName?: string;
   needsSmartTruncation: boolean; // true if internal monologue > 60 words
   contextBefore?: string; // preceding utterance(s) for context
+  outlineItemText?: string; // nearest Gong AI outline item description
+  speakerName?: string; // resolved from speakerMap
+  speakerTitle?: string; // job title from speakerMap
 }
 
 export interface SurgeryResult {
@@ -102,6 +105,31 @@ function isInWindow(
   return null;
 }
 
+// ─── Outline item lookup ─────────────────────────────────────────────────────
+
+/**
+ * Find the nearest outline item description for a given timestamp.
+ * Outline items are Gong's AI-generated per-moment topic summaries.
+ * All timestamps are in milliseconds (converted in calls/route.ts normalizeOutline).
+ * Uses a ±30s window; returns the closest item text within that window.
+ */
+export function findNearestOutlineItem(
+  outline: OutlineSection[],
+  timestampMs: number,
+  windowMs = 30_000
+): string | undefined {
+  let best: { text: string; dist: number } | null = null;
+  for (const section of outline) {
+    for (const item of section.items || []) {
+      const dist = Math.abs(item.startTimeMs - timestampMs);
+      if (dist <= windowMs && (!best || dist < best.dist)) {
+        best = { text: item.text, dist };
+      }
+    }
+  }
+  return best?.text;
+}
+
 // ─── Context enrichment ─────────────────────────────────────────────────────
 
 /**
@@ -146,7 +174,8 @@ export function performSurgery(
   utterances: Utterance[],
   outline: OutlineSection[],
   relevantSections: string[],
-  callDurationMs: number
+  callDurationMs: number,
+  speakerMap: Record<string, { name: string; title: string }> = {}
 ): SurgeryResult {
   const windows = buildChapterWindows(outline, relevantSections);
   const excerpts: SurgicalExcerpt[] = [];
@@ -183,6 +212,7 @@ export function performSurgery(
       contextBefore = enrichContext(utterances, i);
     }
 
+    const speaker = speakerMap[u.speakerId];
     const excerpt: SurgicalExcerpt = {
       speakerId: u.speakerId,
       text: u.text,
@@ -193,6 +223,9 @@ export function performSurgery(
       sectionName: sectionName || undefined,
       needsSmartTruncation,
       contextBefore,
+      outlineItemText: findNearestOutlineItem(outline, u.startTimeMs),
+      speakerName: speaker?.name,
+      speakerTitle: speaker?.title,
     };
 
     const excerptIndex = excerpts.length;
@@ -243,6 +276,8 @@ Return JSON array of objects: [{ "index": <excerpt_index>, "kept": "<kept senten
 
 /**
  * Format excerpts into the analysis-ready text block for the smart model.
+ * Groups by section, includes Gong AI outline item descriptions, tracker labels,
+ * and resolved speaker names/titles for precision LLM analysis.
  */
 export function formatExcerptsForAnalysis(
   excerpts: SurgicalExcerpt[],
@@ -255,23 +290,56 @@ export function formatExcerptsForAnalysis(
   keyPoints: string[]
 ): string {
   let out = `Call: ${callTitle} (${callDate}) | Account: ${accountName} | Talk ratio: ${talkRatioPct}%\n`;
-  out += `Trackers fired: ${trackersFired.join(', ') || 'none'}\n`;
-  out += `Outline context: ${relevantSections.join(', ')}\n`;
   if (keyPoints.length > 0) {
     out += `Key points: ${keyPoints.join(' | ')}\n`;
   }
-  out += `\nTranscript excerpts:\n\n`;
+  out += '\n';
 
+  // Group excerpts by section (null section = tracker-only hits)
+  const bySection = new Map<string, SurgicalExcerpt[]>();
   for (const ex of excerpts) {
-    const label = ex.isInternal ? 'REP CONTEXT' : 'CUSTOMER';
-    const trackerTag = ex.trackers.length > 0
-      ? `\n[TRACKER: ${ex.trackers.map(t => `"${t}"`).join(', ')} fired here]`
-      : '';
+    const key = ex.sectionName || '__tracker_only__';
+    if (!bySection.has(key)) bySection.set(key, []);
+    bySection.get(key)!.push(ex);
+  }
 
-    if (ex.contextBefore) {
-      out += `[${ex.timestampFormatted}] [CONTEXT: ${ex.contextBefore}]\n`;
+  for (const [sectionKey, sectionExcerpts] of bySection) {
+    const sectionLabel = sectionKey === '__tracker_only__'
+      ? 'Other Relevant Moments'
+      : sectionKey;
+    out += `── SECTION: "${sectionLabel}" ${'─'.repeat(Math.max(0, 50 - sectionLabel.length))}\n\n`;
+
+    let lastOutlineItem = '';
+    for (const ex of sectionExcerpts) {
+      // Print Gong AI outline item description when it changes
+      if (ex.outlineItemText && ex.outlineItemText !== lastOutlineItem) {
+        out += `  [Gong AI: "${ex.outlineItemText}"]\n\n`;
+        lastOutlineItem = ex.outlineItemText;
+      }
+
+      out += `  [${ex.timestampFormatted}]`;
+
+      if (ex.trackers.length > 0) {
+        out += ` TRACKER: ${ex.trackers.join(', ')}`;
+      }
+      out += '\n';
+
+      // Speaker line with name/title if available
+      const affiliation = ex.isInternal ? 'INTERNAL' : 'EXTERNAL';
+      if (ex.speakerName) {
+        const titlePart = ex.speakerTitle ? `, ${ex.speakerTitle}` : '';
+        out += `  SPEAKER: ${ex.speakerName}${titlePart} [${affiliation}]\n`;
+      } else {
+        out += `  SPEAKER: ${affiliation}\n`;
+      }
+
+      // Context (reach-back)
+      if (ex.contextBefore) {
+        out += `  CONTEXT: ${ex.contextBefore}\n`;
+      }
+
+      out += `  TEXT: ${ex.text}\n\n`;
     }
-    out += `[${ex.timestampFormatted}] [${label}: ${ex.text}]${trackerTag}\n\n`;
   }
 
   return out;

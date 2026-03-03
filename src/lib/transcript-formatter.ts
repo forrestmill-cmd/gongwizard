@@ -2,6 +2,8 @@
 
 import { estimateTokens } from './token-utils';
 import { formatDuration, formatTimestamp } from './format-utils';
+import { buildUtterances, alignTrackersToUtterances, extractTrackerOccurrences } from './tracker-alignment';
+import { findNearestOutlineItem, type OutlineSection } from './transcript-surgery';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -37,10 +39,13 @@ export interface CallForExport {
   brief: string;
   turns: FormattedTurn[];
   interactionStats?: any;
+  rawMonologues?: Array<{
+    speakerId: string;
+    sentences?: Array<{ text: string; start: number; end?: number }>;
+  }>;
 }
 
 export interface ExportOptions {
-  removeFillerGreetings: boolean;
   condenseMonologues: boolean;
   includeMetadata: boolean;
   includeAIBrief: boolean;
@@ -79,49 +84,26 @@ export function groupTranscriptTurns(
   return turns;
 }
 
-// ─── Filler / monologue processing ──────────────────────────────────────────
+// ─── Internal turn truncation ────────────────────────────────────────────────
+// Turns ≥150 words: keep first 2 sentences + [...] + last 2 sentences.
+// Below threshold: pass verbatim. Applied only to internal (rep) turns.
 
-const FILLER_PATTERNS = [
-  /^(hi|hello|hey|thanks|thank you|bye|goodbye|talk soon|have a great|sounds good|absolutely|of course|sure|yeah|yes|no|okay|ok|alright|right|great|perfect)[!.,\s]*$/i,
-];
+const INTERNAL_WORD_THRESHOLD = 150;
 
-export function filterFillerTurns(turns: FormattedTurn[]): FormattedTurn[] {
-  return turns.filter((t) => {
-    const trimmed = t.text.trim();
-    if (trimmed.length < 5) return false;
-    return !FILLER_PATTERNS.some((p) => p.test(trimmed));
-  });
+function truncateIfLong(text: string): string {
+  const words = text.trim().split(/\s+/);
+  if (words.length < INTERNAL_WORD_THRESHOLD) return text.trim();
+  const sentences = text.trim().match(/[^.!?]+[.!?]+["']?|[^.!?]+$/g) || [text.trim()];
+  if (sentences.length <= 4) return text.trim();
+  const first2 = sentences.slice(0, 2).join(' ').trim();
+  const last2 = sentences.slice(-2).join(' ').trim();
+  return `${first2} [...] ${last2}`;
 }
 
-export function condenseInternalMonologues(turns: FormattedTurn[]): FormattedTurn[] {
-  const result: FormattedTurn[] = [];
-  let i = 0;
-  while (i < turns.length) {
-    const turn = turns[i];
-    if (turn.isInternal) {
-      let j = i + 1;
-      const group: FormattedTurn[] = [turn];
-      while (j < turns.length && turns[j].isInternal && turns[j].speakerId === turn.speakerId) {
-        group.push(turns[j]);
-        j++;
-      }
-      if (group.length > 2) {
-        const condensed: FormattedTurn = {
-          ...turn,
-          text: group.map((t) => t.text).join(' '),
-        };
-        result.push(condensed);
-        i = j;
-      } else {
-        result.push(turn);
-        i++;
-      }
-    } else {
-      result.push(turn);
-      i++;
-    }
-  }
-  return result;
+export function truncateLongInternalTurns(turns: FormattedTurn[]): FormattedTurn[] {
+  return turns.map((turn) =>
+    turn.isInternal ? { ...turn, text: truncateIfLong(turn.text) } : turn
+  );
 }
 
 // ─── Export builders ────────────────────────────────────────────────────────
@@ -170,8 +152,7 @@ function buildCallText(call: CallForExport, opts: ExportOptions): string {
   out += `[I]=Internal, [E]=External (shown in ALL CAPS)\n\n`;
 
   let turns = call.turns;
-  if (opts.removeFillerGreetings) turns = filterFillerTurns(turns);
-  if (opts.condenseMonologues) turns = condenseInternalMonologues(turns);
+  if (opts.condenseMonologues) turns = truncateLongInternalTurns(turns);
 
   for (const turn of turns) {
     const label = `${turn.isInternal ? 'I' : 'E'}`;
@@ -202,8 +183,7 @@ export function buildXML(calls: CallForExport[], opts: ExportOptions): string {
 
   for (const call of calls) {
     let turns = call.turns;
-    if (opts.removeFillerGreetings) turns = filterFillerTurns(turns);
-    if (opts.condenseMonologues) turns = condenseInternalMonologues(turns);
+    if (opts.condenseMonologues) turns = truncateLongInternalTurns(turns);
 
     out += `  <call id="${escapeXml(call.id)}" title="${escapeXml(call.title)}" date="${escapeXml(call.date)}" duration="${call.duration}">\n`;
 
@@ -247,8 +227,7 @@ export function buildJSONL(calls: CallForExport[], opts: ExportOptions): string 
   return calls
     .map((call) => {
       let turns = call.turns;
-      if (opts.removeFillerGreetings) turns = filterFillerTurns(turns);
-      if (opts.condenseMonologues) turns = condenseInternalMonologues(turns);
+      if (opts.condenseMonologues) turns = truncateLongInternalTurns(turns);
 
       const obj: any = {
         id: call.id,
@@ -276,6 +255,13 @@ export function buildJSONL(calls: CallForExport[], opts: ExportOptions): string 
       return JSON.stringify(obj);
     })
     .join('\n');
+}
+
+function escapeCSV(val: string): string {
+  if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+    return '"' + val.replace(/"/g, '""') + '"';
+  }
+  return val;
 }
 
 export function buildCSVSummary(calls: CallForExport[], allCalls: any[]): string {
@@ -312,12 +298,102 @@ export function buildCSVSummary(calls: CallForExport[], allCalls: any[]): string
     ];
   });
 
-  const escapeCSV = (val: string) => {
-    if (val.includes(',') || val.includes('"') || val.includes('\n')) {
-      return '"' + val.replace(/"/g, '""') + '"';
+  const lines = [headers.map(escapeCSV).join(',')];
+  for (const row of rows) {
+    lines.push(row.map(escapeCSV).join(','));
+  }
+  return lines.join('\n');
+}
+
+function buildCsvContext(
+  utterances: import('./tracker-alignment').Utterance[],
+  index: number,
+  speakerMap: Map<string, Speaker>
+): string {
+  function formatTurn(u: import('./tracker-alignment').Utterance): string {
+    const speaker = speakerMap.get(u.speakerId);
+    const firstName = speaker?.firstName || speaker?.name?.split(' ')[0] || 'Unknown';
+    const label = u.isInternal ? `Internal - ${firstName}` : `External - ${firstName}`;
+    return `[${label}] ${truncateIfLong(u.text)}`;
+  }
+
+  const parts: string[] = [];
+
+  const prev = index > 0 ? utterances[index - 1] : null;
+  if (!prev) return '';
+
+  const prevWords = prev.text.trim().split(/\s+/).length;
+  if (prevWords < 11 && index > 1) {
+    parts.push(formatTurn(utterances[index - 2]));
+  }
+  parts.push(formatTurn(prev));
+
+  return parts.join(' | ');
+}
+
+export function buildUtteranceCSV(calls: CallForExport[], allCalls: any[]): string {
+  const headers = [
+    'Call ID', 'Call Date', 'Account Name',
+    'Speaker Name', 'Speaker Title',
+    'Outline Section', 'Tracker Hits',
+    'PRIMARY_ANALYSIS_TEXT', 'REFERENCE_ONLY_CONTEXT',
+  ];
+
+  const callMap = new Map(allCalls.map((c: any) => [c.id, c]));
+  const rows: string[][] = [];
+
+  for (const call of calls) {
+    if (!call.rawMonologues || call.rawMonologues.length === 0) continue;
+
+    const speakerMap = new Map(call.speakers.map(s => [s.speakerId, s]));
+    const rawCall = callMap.get(call.id) || {} as any;
+
+    const utterances = buildUtterances(
+      call.rawMonologues,
+      (speakerId) => speakerMap.get(speakerId)?.isInternal ?? true
+    );
+
+    const trackerOccs = extractTrackerOccurrences(rawCall.trackers || []);
+    alignTrackersToUtterances(utterances, trackerOccs);
+
+    const outline: OutlineSection[] = (rawCall.outline || []).map((o: any) => ({
+      name: o.section || o.name || '',
+      startTimeMs: (o.startTime || 0) * 1000,
+      durationMs: (o.duration || 0) * 1000,
+      items: (o.items || []).map((item: any) => ({
+        text: item.text || item.name || '',
+        startTimeMs: (item.startTime || 0) * 1000,
+        durationMs: (item.duration || 0) * 1000,
+      })),
+    }));
+
+    for (let i = 0; i < utterances.length; i++) {
+      const u = utterances[i];
+      if (u.isInternal) continue;
+
+      const speaker = speakerMap.get(u.speakerId);
+      const speakerName = speaker?.name || 'Unknown';
+      const speakerTitle = speaker?.title || '';
+
+      const outlineSection = findNearestOutlineItem(outline, u.startTimeMs) || '';
+
+      const trackerHits = u.trackers.join('; ');
+
+      const context = buildCsvContext(utterances, i, speakerMap);
+
+      rows.push([
+        call.id,
+        call.date,
+        call.accountName || rawCall.accountName || '',
+        speakerName,
+        speakerTitle,
+        outlineSection,
+        trackerHits,
+        u.text,
+        context,
+      ]);
     }
-    return val;
-  };
+  }
 
   const lines = [headers.map(escapeCSV).join(',')];
   for (const row of rows) {
@@ -328,7 +404,7 @@ export function buildCSVSummary(calls: CallForExport[], allCalls: any[]): string
 
 export function buildExportContent(
   calls: CallForExport[],
-  fmt: 'markdown' | 'xml' | 'jsonl' | 'csv',
+  fmt: 'markdown' | 'xml' | 'jsonl' | 'csv' | 'utterance-csv',
   opts: ExportOptions,
   allCalls?: any[]
 ): { content: string; extension: string; mimeType: string } {
@@ -338,6 +414,8 @@ export function buildExportContent(
     return { content: buildXML(calls, opts), extension: 'xml', mimeType: 'application/xml' };
   } else if (fmt === 'csv') {
     return { content: buildCSVSummary(calls, allCalls || []), extension: 'csv', mimeType: 'text/csv' };
+  } else if (fmt === 'utterance-csv') {
+    return { content: buildUtteranceCSV(calls, allCalls || []), extension: 'csv', mimeType: 'text/csv' };
   } else {
     return { content: buildJSONL(calls, opts), extension: 'jsonl', mimeType: 'application/jsonl' };
   }

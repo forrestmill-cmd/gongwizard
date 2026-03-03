@@ -24,6 +24,20 @@ export async function POST(request: NextRequest) {
           .map((s: any) => s.name)
           .filter(Boolean);
 
+        // Build outline with Gong AI item descriptions (up to 3 per section, 100 chars each)
+        const outlineSummary = (call.outline || [])
+          .filter((s: any) => s.name)
+          .map((s: any) => {
+            const items = (s.items || [])
+              .map((item: any) => item.text)
+              .filter(Boolean)
+              .slice(0, 3)
+              .map((t: string) => `    • ${t.slice(0, 100)}`)
+              .join('\n');
+            return items ? `  ${s.name}:\n${items}` : `  ${s.name}`;
+          })
+          .join('\n');
+
         const prompt = `You are scoring a sales call for relevance to a research question.
 
 Research question: "${question}"
@@ -32,10 +46,12 @@ Call metadata:
 - Title: ${call.title || 'Untitled'}
 - Brief: ${call.brief || 'No summary available'}
 - Key points: ${(call.keyPoints || []).join(' | ') || 'None'}
-- Outline sections: ${outlineSections.join(', ') || 'None'}
 - Trackers fired: ${trackerNames.join(', ') || 'None'}
 - Topics: ${(call.topics || []).join(', ') || 'None'}
 - Talk ratio: ${call.talkRatio != null ? Math.round(call.talkRatio * 100) + '%' : 'Unknown'}
+
+Call outline with Gong AI topic summaries:
+${outlineSummary || 'None'}
 
 Score this call 0-10 for relevance to the research question.
 Return JSON: { "score": <0-10>, "reason": "<one sentence>", "relevant_sections": ["<section names from outline that likely contain signal>"] }`;

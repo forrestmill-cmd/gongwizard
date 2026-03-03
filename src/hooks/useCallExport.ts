@@ -18,7 +18,7 @@ interface UseCallExportParams {
   selectedIds: Set<string>;
   session: any;
   calls: any[];
-  exportFormat: 'markdown' | 'xml' | 'jsonl' | 'csv';
+  exportFormat: 'markdown' | 'xml' | 'jsonl' | 'csv' | 'utterance-csv';
   exportOpts: ExportOptions;
 }
 
@@ -92,6 +92,7 @@ export function useCallExport({
           brief: callMeta.brief || '',
           turns,
           interactionStats: callMeta.interactionStats || undefined,
+          rawMonologues: t.transcript || [],
         };
       });
   }, [selectedIds, session, calls]);
@@ -102,7 +103,10 @@ export function useCallExport({
     try {
       const callsForExport = await fetchTranscriptsForSelected();
       const { content, extension, mimeType } = buildExportContent(callsForExport, exportFormat, exportOpts, calls);
-      downloadFile(content, `gong-transcripts-${format(new Date(), 'yyyy-MM-dd')}.${extension}`, mimeType);
+      const filename = exportFormat === 'utterance-csv'
+        ? `gong-utterances-${format(new Date(), 'yyyy-MM-dd')}.csv`
+        : `gong-transcripts-${format(new Date(), 'yyyy-MM-dd')}.${extension}`;
+      downloadFile(content, filename, mimeType);
     } catch (err: any) {
       alert(err.message || 'Export failed');
     } finally {
