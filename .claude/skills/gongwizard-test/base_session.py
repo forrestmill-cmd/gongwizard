@@ -28,7 +28,7 @@ SKILL_DIR = Path(__file__).parent
 PROJECT_DIR = SKILL_DIR.parent.parent.parent  # .../gongwizard/
 ENV_FILE = PROJECT_DIR / '.env.local'
 
-BASE_URL = 'http://localhost:3000'
+BASE_URL = os.environ.get('BASE_URL', 'http://localhost:3000')
 GONG_BASE_URL = 'https://us-11211.api.gong.io'
 SITE_PASSWORD = 'RingMyBell'
 
