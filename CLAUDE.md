@@ -80,6 +80,36 @@ npm run build   # Production build
 npm run lint    # ESLint
 ```
 
+## Testing with Playwright
+
+A project-scoped skill handles all auth and credential injection automatically.
+
+**Run the smoke test (22 checks — gate, session, load calls, export tabs, utterance CSV, transcript search):**
+```bash
+python3 .claude/skills/gongwizard-test/test_smoke.py
+```
+
+**Write a new test:**
+```python
+import sys
+sys.path.insert(0, '.claude/skills/gongwizard-test')
+from base_session import setup_page, BASE_URL
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    page = browser.new_context().new_page()
+    setup_page(page)                          # handles gate + session injection
+    page.goto(f'{BASE_URL}/calls')
+    page.wait_for_load_state('networkidle')
+    # ... your test logic ...
+    browser.close()
+```
+
+`setup_page()` reads `GONG_DEV_ACCESS_KEY` / `GONG_DEV_SECRET_KEY` from `.env.local`, passes the site gate (`RingMyBell`), and injects the Gong session into `sessionStorage` — no manual credential handling needed.
+
+Skill files: `.claude/skills/gongwizard-test/` — `SKILL.md` (full docs), `base_session.py` (helper), `test_smoke.py` (smoke test).
+
 ## Gong API Endpoints Used
 
 | Endpoint | Method | Batching | Purpose |
