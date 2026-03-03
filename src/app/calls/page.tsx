@@ -70,12 +70,47 @@ interface GongCall {
   url?: string;
 }
 
+interface TranscriptMatch {
+  callId: string;
+  speakerId: string;
+  timestamp: string;
+  text: string;
+  context: string;
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function highlightKeyword(text: string, keyword: string): React.ReactNode[] {
+  if (!keyword) return [text];
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
+  return parts.map((part, i) =>
+    part.toLowerCase() === keyword.toLowerCase()
+      ? <strong key={i} className="font-semibold text-foreground">{part}</strong>
+      : part
+  );
+}
+
 // ─── CallCard ────────────────────────────────────────────────────────────────
 
-function CallCard({ call, isSelected, onToggle }: {
+function CallCard({
+  call,
+  isSelected,
+  onToggle,
+  transcriptSearchActive,
+  matchSnippets,
+  speakerFilter,
+  transcriptKeyword,
+  getMatchAffiliation,
+}: {
   call: GongCall;
   isSelected: boolean;
   onToggle: (id: string) => void;
+  transcriptSearchActive: boolean;
+  matchSnippets: TranscriptMatch[];
+  speakerFilter: 'all' | 'external' | 'internal';
+  transcriptKeyword: string;
+  getMatchAffiliation: (speakerId: string, call: GongCall) => 'internal' | 'external';
 }) {
   const callDate = call.started ? format(new Date(call.started), 'MMM d, yyyy') : '';
   return (
@@ -150,6 +185,38 @@ function CallCard({ call, isSelected, onToggle }: {
                 </span>
               </div>
             )}
+
+            {transcriptSearchActive && (() => {
+              const visible =
+                speakerFilter === 'all'
+                  ? matchSnippets
+                  : matchSnippets.filter(
+                      (m) => getMatchAffiliation(m.speakerId, call) === speakerFilter
+                    );
+              if (!visible.length) return null;
+              return (
+                <div className="mt-2 pt-2 border-t space-y-1.5">
+                  <p className="text-xs text-muted-foreground font-medium">
+                    {visible.length} match{visible.length !== 1 ? 'es' : ''}
+                  </p>
+                  {visible.slice(0, 3).map((m, i) => {
+                    const affiliation = getMatchAffiliation(m.speakerId, call);
+                    return (
+                      <div key={i} className="text-xs text-muted-foreground leading-relaxed">
+                        <span className="font-mono text-[10px] mr-1">[{m.timestamp}]</span>
+                        <span className="mr-1 opacity-60">
+                          {affiliation === 'external' ? 'Customer' : 'Rep'}
+                        </span>
+                        {highlightKeyword(m.text, transcriptKeyword)}
+                      </div>
+                    );
+                  })}
+                  {visible.length > 3 && (
+                    <p className="text-xs text-muted-foreground">+{visible.length - 3} more</p>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
       </CardContent>
@@ -177,7 +244,7 @@ export default function CallsPage() {
 
   const [rightPanelTab, setRightPanelTab] = useState<'export' | 'analyze'>('analyze');
 
-  const [exportFormat, setExportFormat] = useState<'markdown' | 'xml' | 'jsonl' | 'csv'>('markdown');
+  const [exportFormat, setExportFormat] = useState<'markdown' | 'xml' | 'jsonl' | 'csv' | 'utterance-csv'>('markdown');
   const [exportOpts, setExportOpts] = useState<ExportOptions>({
     removeFillerGreetings: true,
     condenseMonologues: true,
@@ -187,6 +254,13 @@ export default function CallsPage() {
   });
 
   const filters = useFilterState();
+
+  const [transcriptKeyword, setTranscriptKeyword] = useState('');
+  const [isSearchingTranscripts, setIsSearchingTranscripts] = useState(false);
+  const [transcriptSearchActive, setTranscriptSearchActive] = useState(false);
+  const [searchProgress, setSearchProgress] = useState({ searched: 0, total: 0, matchCount: 0 });
+  const [searchMatches, setSearchMatches] = useState<Map<string, TranscriptMatch[]>>(new Map());
+  const [speakerFilter, setSpeakerFilter] = useState<'all' | 'external' | 'internal'>('all');
 
   const { exporting, copied, handleExport, handleCopy, handleZipExport } = useCallExport({
     selectedIds,
@@ -204,6 +278,25 @@ export default function CallsPage() {
     }
     setSession(s);
   }, [router]);
+
+  useEffect(() => {
+    if (transcriptSearchActive || isSearchingTranscripts) {
+      setTranscriptSearchActive(false);
+      setIsSearchingTranscripts(false);
+      setSearchMatches(new Map());
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    filters.searchText,
+    filters.activeTrackers,
+    filters.activeTopics,
+    filters.excludeInternal,
+    filters.durationRange,
+    filters.talkRatioRange,
+    filters.participantSearch,
+    filters.minExternalSpeakers,
+    filters.aiContentSearch,
+  ]);
 
   const allTrackers: string[] = useMemo(() => {
     if (!session?.trackers) return [];
@@ -236,6 +329,16 @@ export default function CallsPage() {
       if (!matchesParticipantName(call, filters.participantSearch)) return false;
       if (!matchesMinExternalSpeakers(call, filters.minExternalSpeakers)) return false;
       if (!matchesAiContentSearch(call, filters.aiContentSearch)) return false;
+      if (transcriptSearchActive) {
+        const matches = searchMatches.get(call.id) || [];
+        if (matches.length === 0) return false;
+        if (speakerFilter !== 'all') {
+          const hasVisible = matches.some(
+            (m) => getMatchAffiliation(m.speakerId, call) === speakerFilter
+          );
+          if (!hasVisible) return false;
+        }
+      }
       return true;
     });
   }, [
@@ -249,6 +352,10 @@ export default function CallsPage() {
     filters.participantSearch,
     filters.minExternalSpeakers,
     filters.aiContentSearch,
+    transcriptSearchActive,
+    searchMatches,
+    speakerFilter,
+    session,
   ]);
 
   const selectedCalls = useMemo(
@@ -351,6 +458,84 @@ export default function CallsPage() {
 
   function deselectAll() {
     setSelectedIds(new Set());
+  }
+
+  function getMatchAffiliation(speakerId: string, call: GongCall): 'internal' | 'external' {
+    const domains: string[] = session?.internalDomains || [];
+    const party = (call.parties || []).find(
+      (p: any) => (p.speakerId || p.userId || p.id) === speakerId
+    );
+    return party && isInternalParty(party, domains) ? 'internal' : 'external';
+  }
+
+  async function runTranscriptSearch() {
+    if (!session || !transcriptKeyword.trim()) return;
+    const ids = filteredCalls.map((c) => c.id).slice(0, 500);
+
+    setIsSearchingTranscripts(true);
+    setSearchMatches(new Map());
+    setTranscriptSearchActive(false);
+    setSearchProgress({ searched: 0, total: ids.length, matchCount: 0 });
+
+    let res: Response;
+    try {
+      res = await fetch('/api/gong/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Gong-Auth': session.authHeader,
+        },
+        body: JSON.stringify({
+          callIds: ids,
+          keyword: transcriptKeyword.trim(),
+          baseUrl: session.baseUrl,
+        }),
+      });
+    } catch {
+      setIsSearchingTranscripts(false);
+      return;
+    }
+
+    if (!res.ok || !res.body) {
+      setIsSearchingTranscripts(false);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop()!;
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const event = JSON.parse(line);
+          if (event.type === 'progress') {
+            setSearchProgress({
+              searched: event.searched,
+              total: event.total,
+              matchCount: event.matchCount,
+            });
+          } else if (event.type === 'match') {
+            setSearchMatches((prev) => {
+              const next = new Map(prev);
+              next.set(event.callId, [...(next.get(event.callId) || []), event]);
+              return next;
+            });
+          } else if (event.type === 'done') {
+            setTranscriptSearchActive(true);
+            setIsSearchingTranscripts(false);
+          }
+        }
+      }
+    } finally {
+      setIsSearchingTranscripts(false);
+    }
   }
 
   function disconnect() {
@@ -619,6 +804,106 @@ export default function CallsPage() {
 
         {/* Center: call list */}
         <main className="flex-1 overflow-y-auto p-4 space-y-3">
+          {/* Transcript search — full-text search across loaded call transcripts */}
+          {hasLoaded && (
+            <div className="space-y-1.5">
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+                  <Input
+                    placeholder="Search transcripts…"
+                    value={transcriptKeyword}
+                    onChange={(e) => setTranscriptKeyword(e.target.value)}
+                    onKeyDown={(e) =>
+                      e.key === 'Enter' && !isSearchingTranscripts && runTranscriptSearch()
+                    }
+                    className="pl-8 h-8 text-sm"
+                    disabled={isSearchingTranscripts}
+                  />
+                </div>
+                <select
+                  value={speakerFilter}
+                  onChange={(e) =>
+                    setSpeakerFilter(e.target.value as 'all' | 'external' | 'internal')
+                  }
+                  title="Filter by speaker type"
+                  className="h-8 rounded-md border bg-background px-2 text-sm text-muted-foreground"
+                >
+                  <option value="all">All speakers</option>
+                  <option value="external">Customer only</option>
+                  <option value="internal">Rep only</option>
+                </select>
+                <Button
+                  size="sm"
+                  className="h-8 shrink-0"
+                  onClick={runTranscriptSearch}
+                  disabled={
+                    isSearchingTranscripts ||
+                    !transcriptKeyword.trim() ||
+                    filteredCalls.length === 0
+                  }
+                >
+                  {isSearchingTranscripts ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    'Search'
+                  )}
+                </Button>
+              </div>
+
+              {isSearchingTranscripts && (
+                <p className="text-xs text-muted-foreground">
+                  Searching {searchProgress.searched}/{searchProgress.total} calls —{' '}
+                  {searchProgress.matchCount} matches…
+                </p>
+              )}
+
+              {transcriptSearchActive && (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-muted-foreground">
+                    {searchProgress.matchCount} match
+                    {searchProgress.matchCount !== 1 ? 'es' : ''} in {searchMatches.size} call
+                    {searchMatches.size !== 1 ? 's' : ''}
+                  </span>
+                  {searchMatches.size > 0 && (
+                    <button
+                      type="button"
+                      className="text-primary underline"
+                      onClick={() =>
+                        setSelectedIds((prev) => {
+                          const next = new Set(prev);
+                          [...searchMatches.keys()].forEach((id) => next.add(id));
+                          return next;
+                        })
+                      }
+                    >
+                      Select all
+                    </button>
+                  )}
+                  <span className="text-muted-foreground">·</span>
+                  <button
+                    type="button"
+                    className="text-muted-foreground underline"
+                    onClick={() => {
+                      setTranscriptSearchActive(false);
+                      setSearchMatches(new Map());
+                    }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+
+              {!transcriptSearchActive &&
+                !isSearchingTranscripts &&
+                filteredCalls.length > 500 && (
+                  <p className="text-xs text-amber-600">
+                    Note: transcript search covers first 500 of {filteredCalls.length} calls
+                  </p>
+                )}
+            </div>
+          )}
+
           {/* Mobile search */}
           <div className="md:hidden relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
@@ -681,6 +966,11 @@ export default function CallsPage() {
               call={call}
               isSelected={selectedIds.has(call.id)}
               onToggle={toggleSelect}
+              transcriptSearchActive={transcriptSearchActive}
+              matchSnippets={searchMatches.get(call.id) || []}
+              speakerFilter={speakerFilter}
+              transcriptKeyword={transcriptKeyword}
+              getMatchAffiliation={getMatchAffiliation}
             />
           ))}
         </main>
@@ -754,10 +1044,23 @@ export default function CallsPage() {
                             JSONL
                           </TabsTrigger>
                           <TabsTrigger value="csv" className="flex-1 text-xs">
-                            CSV
+                            Summary
+                          </TabsTrigger>
+                          <TabsTrigger value="utterance-csv" className="flex-1 text-xs">
+                            Utterance
                           </TabsTrigger>
                         </TabsList>
                       </Tabs>
+                      {exportFormat === 'csv' && (
+                        <p className="text-xs text-muted-foreground">
+                          1 row per call. Best for reporting in Excel or BI tools. Includes metadata, AI briefs, and tracker counts.
+                        </p>
+                      )}
+                      {exportFormat === 'utterance-csv' && (
+                        <p className="text-xs text-muted-foreground">
+                          1 row per customer turn. Built for Clay, Zapier, and Snowflake. <span className="font-mono text-xs">PRIMARY_ANALYSIS_TEXT</span> = verbatim customer quote. <span className="font-mono text-xs">REFERENCE_ONLY_CONTEXT</span> = preceding rep turns for LLM grounding.
+                        </p>
+                      )}
                     </div>
 
                     <div className="space-y-2">
