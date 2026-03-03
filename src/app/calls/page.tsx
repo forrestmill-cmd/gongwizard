@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Separator } from '@/components/ui/separator';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import AnalyzePanel from '@/components/analyze-panel';
 import { Slider } from '@/components/ui/slider';
 import {
@@ -22,8 +22,10 @@ import {
   CheckSquare,
   Square,
   AlertCircle,
-  Sparkles,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { format, subDays } from 'date-fns';
 import { estimateTokens, contextLabel, contextColor } from '@/lib/token-utils';
 import { formatDuration, isInternalParty, truncateToFirstSentence } from '@/lib/format-utils';
@@ -102,6 +104,8 @@ function CallCard({
   speakerFilter,
   transcriptKeyword,
   getMatchAffiliation,
+  activeTrackers,
+  activeTopics,
 }: {
   call: GongCall;
   isSelected: boolean;
@@ -111,6 +115,8 @@ function CallCard({
   speakerFilter: 'all' | 'external' | 'internal';
   transcriptKeyword: string;
   getMatchAffiliation: (speakerId: string, call: GongCall) => 'internal' | 'external';
+  activeTrackers: Set<string>;
+  activeTopics: Set<string>;
 }) {
   const callDate = call.started ? format(new Date(call.started), 'MMM d, yyyy') : '';
   return (
@@ -144,24 +150,30 @@ function CallCard({
               {call.accountName && <span>{call.accountName}</span>}
             </div>
 
-            {(call.topics?.length || call.trackers?.length) ? (
-              <div className="flex flex-wrap gap-1">
-                {(call.topics || []).map((topic) => (
-                  <Badge key={topic} variant="secondary" className="text-xs px-1.5 py-0">
-                    {topic}
-                  </Badge>
-                ))}
-                {(call.trackers || []).map((tracker) => (
-                  <Badge
-                    key={tracker}
-                    variant="outline"
-                    className="text-xs px-1.5 py-0 border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-300"
-                  >
-                    {tracker}
-                  </Badge>
-                ))}
-              </div>
-            ) : null}
+            {(() => {
+              const hasTrackerFilter = activeTrackers.size > 0;
+              const hasTopicFilter = activeTopics.size > 0;
+              if (!hasTrackerFilter && !hasTopicFilter) {
+                const parts: string[] = [];
+                if (call.trackers?.length) parts.push(`${call.trackers.length} tracker${call.trackers.length !== 1 ? 's' : ''}`);
+                if (call.topics?.length) parts.push(`${call.topics.length} topic${call.topics.length !== 1 ? 's' : ''}`);
+                if (!parts.length) return null;
+                return <span className="text-[10px] text-muted-foreground">{parts.join(' · ')}</span>;
+              }
+              const matchingTrackers = (call.trackers || []).filter(t => activeTrackers.has(t));
+              const matchingTopics = (call.topics || []).filter(t => activeTopics.has(t));
+              if (!matchingTrackers.length && !matchingTopics.length) return null;
+              return (
+                <div className="flex flex-wrap gap-1">
+                  {matchingTopics.map(topic => (
+                    <Badge key={topic} variant="secondary" className="text-xs px-1.5 py-0">{topic}</Badge>
+                  ))}
+                  {matchingTrackers.map(tracker => (
+                    <Badge key={tracker} variant="outline" className="text-xs px-1.5 py-0 border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-300">{tracker}</Badge>
+                  ))}
+                </div>
+              );
+            })()}
 
             {call.brief && (
               <p className="text-xs text-muted-foreground leading-relaxed">
@@ -241,6 +253,7 @@ export default function CallsPage() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [workspaceId, setWorkspaceId] = useState<string>('');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
   const [rightPanelTab, setRightPanelTab] = useState<'export' | 'analyze'>('analyze');
 
@@ -558,6 +571,14 @@ export default function CallsPage() {
     );
   }
 
+  const FORMAT_OPTIONS = [
+    { value: 'markdown',      label: 'Markdown',      desc: 'Upload to ChatGPT or Claude' },
+    { value: 'xml',           label: 'XML',           desc: 'Structured format for Claude API' },
+    { value: 'jsonl',         label: 'JSONL',         desc: 'One object per call, structured' },
+    { value: 'csv',           label: 'CSV Summary',   desc: '1 row per call · Excel / BI tools' },
+    { value: 'utterance-csv', label: 'Utterance CSV', desc: '1 row per turn · Clay / Zapier' },
+  ] as const;
+
   return (
     <div className="min-h-screen bg-muted/30 flex flex-col">
       {/* Top bar */}
@@ -588,26 +609,6 @@ export default function CallsPage() {
               className="h-8 w-36 text-sm"
             />
           </div>
-          {session.workspaces?.length > 1 && (
-            <div className="flex items-center gap-2">
-              <Label htmlFor="workspace" className="text-sm whitespace-nowrap text-muted-foreground">
-                Workspace
-              </Label>
-              <select
-                id="workspace"
-                value={workspaceId}
-                onChange={(e) => setWorkspaceId(e.target.value)}
-                className="h-8 rounded-md border bg-background px-2 text-sm"
-              >
-                <option value="">All workspaces</option>
-                {session.workspaces.map((ws: any) => (
-                  <option key={ws.id} value={ws.id}>
-                    {ws.name || ws.id}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
           <Button size="sm" onClick={loadCalls} disabled={loading}>
             {loading ? (
               <>
@@ -615,7 +616,7 @@ export default function CallsPage() {
                 Loading…
               </>
             ) : (
-              'Load Calls'
+              'Load My Calls'
             )}
           </Button>
         </div>
@@ -629,36 +630,20 @@ export default function CallsPage() {
       <div className="flex flex-1 overflow-hidden">
         {/* Left sidebar: filters */}
         <aside className="w-[240px] shrink-0 border-r bg-background p-4 overflow-y-auto hidden md:block">
-          <div className="space-y-5">
-            <div className="space-y-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Filters
-              </h3>
+          <div className="space-y-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Filters
+            </h3>
 
-              {/* AI Content Search */}
-              <div className="space-y-1">
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-                  <Input
-                    placeholder="Search AI summaries…"
-                    value={filters.aiContentSearch}
-                    onChange={(e) => filters.setAiContentSearch(e.target.value)}
-                    className="pl-8 h-8 text-sm border-blue-200 dark:border-blue-800"
-                  />
-                </div>
-                <p className="text-[10px] text-muted-foreground">Searches brief, key points, action items, outline</p>
-              </div>
-
-              {/* Text search */}
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-                <Input
-                  placeholder="Search calls…"
-                  value={filters.searchText}
-                  onChange={(e) => filters.setSearchText(e.target.value)}
-                  className="pl-8 h-8 text-sm"
-                />
-              </div>
+            {/* Text search */}
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+              <Input
+                placeholder="Search calls…"
+                value={filters.searchText}
+                onChange={(e) => filters.setSearchText(e.target.value)}
+                className="pl-8 h-8 text-sm"
+              />
             </div>
 
             {/* Exclude internal */}
@@ -673,125 +658,172 @@ export default function CallsPage() {
               </Label>
             </div>
 
-            {/* Duration Range */}
-            {hasLoaded && calls.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Duration
-                </h3>
-                <Slider
-                  min={0}
-                  max={7200}
-                  step={60}
-                  value={filters.durationRange}
-                  onValueChange={(v) => filters.setDurationRange(v as [number, number])}
-                />
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>{formatDuration(filters.durationRange[0])}</span>
-                  <span>{formatDuration(filters.durationRange[1])}</span>
-                </div>
-              </div>
-            )}
-
-            {/* Talk Ratio Range */}
-            {hasLoaded && calls.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Talk Ratio
-                </h3>
-                <Slider
-                  min={0}
-                  max={100}
-                  step={5}
-                  value={filters.talkRatioRange}
-                  onValueChange={(v) => filters.setTalkRatioRange(v as [number, number])}
-                />
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>{filters.talkRatioRange[0]}%</span>
-                  <span>{filters.talkRatioRange[1]}%</span>
-                </div>
-              </div>
-            )}
-
-            {/* Min External Speakers */}
-            <div className="flex items-center gap-2">
-              <Label className="text-xs text-muted-foreground whitespace-nowrap">Min external</Label>
-              <Input
-                type="number"
-                min={0}
-                max={10}
-                value={filters.minExternalSpeakers}
-                onChange={(e) => filters.setMinExternalSpeakers(Number(e.target.value) || 0)}
-                className="h-7 w-16 text-xs"
-              />
-            </div>
-
-            {/* Participant Search */}
-            <div className="space-y-1">
-              <Input
-                placeholder="Search participants…"
-                value={filters.participantSearch}
-                onChange={(e) => filters.setParticipantSearch(e.target.value)}
-                className="h-8 text-sm"
-              />
-            </div>
-
-            {/* Trackers */}
-            {allTrackers.length > 0 && (
+            {/* Tracker chips */}
+            {hasLoaded && allTrackers.length > 0 && (
               <div className="space-y-2">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Trackers
                 </h3>
-                <div className="space-y-1.5">
+                <div className="flex flex-wrap gap-1.5">
                   {allTrackers.map((tracker) => (
-                    <div key={tracker} className="flex items-center gap-2">
-                      <Checkbox
-                        id={`tracker-${tracker}`}
-                        checked={filters.activeTrackers.has(tracker)}
-                        onCheckedChange={() => filters.toggleTracker(tracker)}
-                      />
-                      <Label
-                        htmlFor={`tracker-${tracker}`}
-                        className="text-sm leading-tight cursor-pointer flex-1 truncate"
-                      >
-                        {tracker}
-                      </Label>
-                      <span className="text-xs text-muted-foreground">
-                        {trackerCounts[tracker] ?? 0}
-                      </span>
-                    </div>
+                    <button
+                      key={tracker}
+                      type="button"
+                      onClick={() => filters.toggleTracker(tracker)}
+                      className={cn(
+                        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors",
+                        filters.activeTrackers.has(tracker)
+                          ? "border-primary bg-primary/10 text-primary font-medium"
+                          : "border-border text-muted-foreground hover:bg-muted"
+                      )}
+                    >
+                      {tracker}
+                      <span className="opacity-60">{trackerCounts[tracker] ?? 0}</span>
+                    </button>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* Topics */}
-            {allTopics.length > 0 && (
+            {/* Topic chips */}
+            {hasLoaded && allTopics.length > 0 && (
               <div className="space-y-2">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Topics
                 </h3>
-                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                <div className="flex flex-wrap gap-1.5 max-h-[110px] overflow-y-auto">
                   {allTopics.map((topic) => (
-                    <div key={topic} className="flex items-center gap-2">
-                      <Checkbox
-                        id={`topic-${topic}`}
-                        checked={filters.activeTopics.has(topic)}
-                        onCheckedChange={() => filters.toggleTopic(topic)}
-                      />
-                      <Label
-                        htmlFor={`topic-${topic}`}
-                        className="text-sm leading-tight cursor-pointer flex-1 truncate"
-                      >
-                        {topic}
-                      </Label>
-                      <span className="text-xs text-muted-foreground">{topicCounts[topic] ?? 0}</span>
-                    </div>
+                    <button
+                      key={topic}
+                      type="button"
+                      onClick={() => filters.toggleTopic(topic)}
+                      className={cn(
+                        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors",
+                        filters.activeTopics.has(topic)
+                          ? "border-primary bg-primary/10 text-primary font-medium"
+                          : "border-border text-muted-foreground hover:bg-muted"
+                      )}
+                    >
+                      {topic}
+                      <span className="opacity-60">{topicCounts[topic] ?? 0}</span>
+                    </button>
                   ))}
                 </div>
               </div>
             )}
 
+            {/* More filters toggle */}
+            <button
+              type="button"
+              onClick={() => setShowAdvancedFilters((v) => !v)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full"
+            >
+              {showAdvancedFilters ? (
+                <ChevronUp className="size-3.5" />
+              ) : (
+                <ChevronDown className="size-3.5" />
+              )}
+              {showAdvancedFilters ? 'Hide filters' : 'More filters'}
+            </button>
+
+            {/* Advanced filters (collapsed by default) */}
+            {showAdvancedFilters && (
+              <div className="space-y-4">
+                {/* AI Content Search */}
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">AI summary search</Label>
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+                    <Input
+                      placeholder="Search AI summaries…"
+                      value={filters.aiContentSearch}
+                      onChange={(e) => filters.setAiContentSearch(e.target.value)}
+                      className="pl-8 h-8 text-sm"
+                    />
+                  </div>
+                </div>
+
+                {/* Participant Search */}
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Participant name</Label>
+                  <Input
+                    placeholder="Search participants…"
+                    value={filters.participantSearch}
+                    onChange={(e) => filters.setParticipantSearch(e.target.value)}
+                    className="h-8 text-sm"
+                  />
+                </div>
+
+                {/* Duration Range */}
+                {calls.length > 0 && (
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">Duration</Label>
+                    <Slider
+                      min={0}
+                      max={7200}
+                      step={60}
+                      value={filters.durationRange}
+                      onValueChange={(v) => filters.setDurationRange(v as [number, number])}
+                    />
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <span>{formatDuration(filters.durationRange[0])}</span>
+                      <span>{formatDuration(filters.durationRange[1])}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Talk Ratio Range */}
+                {calls.length > 0 && (
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">Talk ratio</Label>
+                    <Slider
+                      min={0}
+                      max={100}
+                      step={5}
+                      value={filters.talkRatioRange}
+                      onValueChange={(v) => filters.setTalkRatioRange(v as [number, number])}
+                    />
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <span>{filters.talkRatioRange[0]}%</span>
+                      <span>{filters.talkRatioRange[1]}%</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Min External Speakers */}
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs text-muted-foreground whitespace-nowrap">Min external</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={10}
+                    value={filters.minExternalSpeakers}
+                    onChange={(e) => filters.setMinExternalSpeakers(Number(e.target.value) || 0)}
+                    className="h-7 w-16 text-xs"
+                  />
+                </div>
+
+                {/* Workspace (moved from header) */}
+                {session.workspaces?.length > 1 && (
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Workspace</Label>
+                    <select
+                      aria-label="Workspace"
+                      value={workspaceId}
+                      onChange={(e) => setWorkspaceId(e.target.value)}
+                      className="w-full h-8 rounded-md border bg-background px-2 text-sm"
+                    >
+                      <option value="">All workspaces</option>
+                      {session.workspaces.map((ws: any) => (
+                        <option key={ws.id} value={ws.id}>{ws.name || ws.id}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Footer summary */}
             {hasLoaded && (
               <div className="pt-2 space-y-1 text-xs text-muted-foreground border-t">
                 <p>{calls.length} calls loaded</p>
@@ -806,6 +838,7 @@ export default function CallsPage() {
           {/* Transcript search — full-text search across loaded call transcripts */}
           {hasLoaded && (
             <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground font-medium">Search inside transcripts</p>
               <div className="flex gap-2">
                 <div className="relative flex-1">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
@@ -954,8 +987,9 @@ export default function CallsPage() {
 
           {!loading && !hasLoaded && !loadError && (
             <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-2">
-              <p className="text-sm font-medium">No calls loaded yet</p>
-              <p className="text-xs">Set a date range and click Load Calls</p>
+              <p className="text-sm font-medium">Your call library is ready to analyze.</p>
+              <p className="text-xs">Set a date range above and load your calls.</p>
+              <p className="text-xs opacity-60">Most users load 30–90 days at a time.</p>
             </div>
           )}
 
@@ -970,6 +1004,8 @@ export default function CallsPage() {
               speakerFilter={speakerFilter}
               transcriptKeyword={transcriptKeyword}
               getMatchAffiliation={getMatchAffiliation}
+              activeTrackers={filters.activeTrackers}
+              activeTopics={filters.activeTopics}
             />
           ))}
         </main>
@@ -980,12 +1016,10 @@ export default function CallsPage() {
           <div className="border-b px-4 pt-3 pb-0 shrink-0">
             <Tabs value={rightPanelTab} onValueChange={(v) => setRightPanelTab(v as 'export' | 'analyze')}>
               <TabsList className="w-full h-8">
-                <TabsTrigger value="analyze" className="flex-1 text-xs gap-1">
-                  <Sparkles className="size-3" />
+                <TabsTrigger value="analyze" className="flex-1 text-xs">
                   Analyze
                 </TabsTrigger>
-                <TabsTrigger value="export" className="flex-1 text-xs gap-1">
-                  <Download className="size-3" />
+                <TabsTrigger value="export" className="flex-1 text-xs">
                   Export
                 </TabsTrigger>
               </TabsList>
@@ -1006,7 +1040,7 @@ export default function CallsPage() {
                 {selectedIds.size === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 py-10">
                     <p className="text-sm font-medium">No calls selected</p>
-                    <p className="text-xs text-center">Select calls from the list to export them</p>
+                    <p className="text-xs text-center">Select calls from the list to export them.</p>
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -1024,42 +1058,28 @@ export default function CallsPage() {
 
                     <Separator />
 
-                    <div className="space-y-2">
+                    <div className="space-y-1">
                       <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                         Format
                       </Label>
-                      <Tabs
-                        value={exportFormat}
-                        onValueChange={(v) => setExportFormat(v as any)}
-                      >
-                        <TabsList className="w-full h-8 text-xs">
-                          <TabsTrigger value="markdown" className="flex-1 text-xs">
-                            Markdown
-                          </TabsTrigger>
-                          <TabsTrigger value="xml" className="flex-1 text-xs">
-                            XML
-                          </TabsTrigger>
-                          <TabsTrigger value="jsonl" className="flex-1 text-xs">
-                            JSONL
-                          </TabsTrigger>
-                          <TabsTrigger value="csv" className="flex-1 text-xs">
-                            Summary
-                          </TabsTrigger>
-                          <TabsTrigger value="utterance-csv" className="flex-1 text-xs">
-                            Utterance
-                          </TabsTrigger>
-                        </TabsList>
-                      </Tabs>
-                      {exportFormat === 'csv' && (
-                        <p className="text-xs text-muted-foreground">
-                          1 row per call. Best for reporting in Excel or BI tools. Includes metadata, AI briefs, and tracker counts.
-                        </p>
-                      )}
-                      {exportFormat === 'utterance-csv' && (
-                        <p className="text-xs text-muted-foreground">
-                          1 row per customer turn. Built for Clay, Zapier, and Snowflake. <span className="font-mono text-xs">PRIMARY_ANALYSIS_TEXT</span> = verbatim customer quote. <span className="font-mono text-xs">REFERENCE_ONLY_CONTEXT</span> = preceding rep turns for LLM grounding.
-                        </p>
-                      )}
+                      <div className="space-y-1 mt-1">
+                        {FORMAT_OPTIONS.map((f) => (
+                          <button
+                            key={f.value}
+                            type="button"
+                            onClick={() => setExportFormat(f.value as typeof exportFormat)}
+                            className={cn(
+                              "w-full text-left px-3 py-2 rounded-md text-xs border transition-colors",
+                              exportFormat === f.value
+                                ? "border-primary bg-primary/5 ring-1 ring-primary"
+                                : "border-transparent hover:bg-muted"
+                            )}
+                          >
+                            <span className="font-medium text-foreground">{f.label}</span>
+                            <span className="block text-[10px] text-muted-foreground mt-0.5">{f.desc}</span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
 
                     <div className="space-y-2">

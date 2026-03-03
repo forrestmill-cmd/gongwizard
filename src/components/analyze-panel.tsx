@@ -8,16 +8,11 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Separator } from '@/components/ui/separator';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Loader2,
   Search,
   Sparkles,
-  ChevronDown,
-  ChevronRight,
-  MessageSquare,
-  BarChart3,
   Send,
   Download,
 } from 'lucide-react';
@@ -28,6 +23,7 @@ import { performSurgery, formatExcerptsForAnalysis } from '@/lib/transcript-surg
 // ─── Inline token utilities (safe for client components) ────────────────────
 
 const TOKEN_BUDGET = 250_000;
+const MAX_QUESTIONS = 5;
 
 function estimateInputTokens(text: string): number {
   return Math.ceil(text.length / 4);
@@ -43,8 +39,21 @@ interface ScoredCall {
   selected: boolean;
 }
 
+interface QuoteAttribution {
+  quote: string;
+  speaker_name: string;
+  job_title: string;
+  company: string;
+  call_title: string;
+  call_date: string;
+}
+
 interface Finding {
   exact_quote: string;
+  speaker_name: string;
+  job_title: string;
+  company: string;
+  is_external: boolean;
   timestamp: string;
   context: string;
   significance: string;
@@ -54,21 +63,15 @@ interface Finding {
 interface CallFindings {
   callId: string;
   callTitle: string;
+  callDate: string;
   account: string;
   findings: Finding[];
 }
 
-interface Theme {
-  theme: string;
-  frequency: number;
-  representative_quotes: string[];
-  call_ids: string[];
-}
-
-interface FollowUpAnswer {
+interface QAEntry {
   question: string;
   answer: string;
-  supporting_quotes: Array<{ quote: string; call: string; timestamp: string }>;
+  quotes: QuoteAttribution[];
 }
 
 type Stage = 'idle' | 'scoring' | 'scored' | 'analyzing' | 'results';
@@ -110,6 +113,31 @@ const QUESTION_TEMPLATES = [
   { label: 'Questions', q: 'What questions are customers asking most?' },
 ];
 
+// ─── Quote card ─────────────────────────────────────────────────────────────
+
+function QuoteCard({ q }: { q: QuoteAttribution }) {
+  const attribution = [
+    q.speaker_name,
+    [q.job_title, q.company].filter(Boolean).join(' at '),
+  ]
+    .filter(Boolean)
+    .join(', ');
+
+  const source = [q.call_title, q.call_date].filter(Boolean).join(' · ');
+
+  return (
+    <div className="border-l-2 border-primary/30 pl-3 py-1 space-y-0.5">
+      <p className="text-xs italic text-foreground">&ldquo;{q.quote}&rdquo;</p>
+      {attribution && (
+        <p className="text-[10px] text-muted-foreground font-medium">{attribution}</p>
+      )}
+      {source && (
+        <p className="text-[10px] text-muted-foreground">{source}</p>
+      )}
+    </div>
+  );
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export default function AnalyzePanel({ selectedCalls, session, allCalls }: AnalyzePanelProps) {
@@ -122,30 +150,16 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
 
   // Analysis state
   const [callFindings, setCallFindings] = useState<CallFindings[]>([]);
-  const [themes, setThemes] = useState<Theme[]>([]);
-  const [overallSummary, setOverallSummary] = useState('');
+  const [conversation, setConversation] = useState<QAEntry[]>([]);
   const [analysisProgress, setAnalysisProgress] = useState('');
 
   // Follow-up state
-  const [followUps, setFollowUps] = useState<FollowUpAnswer[]>([]);
   const [followUpInput, setFollowUpInput] = useState('');
   const [followUpLoading, setFollowUpLoading] = useState(false);
   const [processedDataCache, setProcessedDataCache] = useState('');
 
   // Token tracking
   const [tokensUsed, setTokensUsed] = useState(0);
-
-  // Expanded call findings
-  const [expandedCalls, setExpandedCalls] = useState<Set<string>>(new Set());
-
-  const toggleCallExpanded = (callId: string) => {
-    setExpandedCalls(prev => {
-      const next = new Set(prev);
-      if (next.has(callId)) next.delete(callId);
-      else next.add(callId);
-      return next;
-    });
-  };
 
   // ─── Score calls ────────────────────────────────────────────────────────
 
@@ -197,9 +211,9 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
     setStage('analyzing');
     setError('');
     setCallFindings([]);
-    setThemes([]);
-    setOverallSummary('');
-    setFollowUps([]);
+    setConversation([]);
+    setFollowUpInput('');
+    setProcessedDataCache('');
     let totalTokens = 0;
 
     try {
@@ -237,6 +251,8 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
 
         const monologues = transcriptMap.get(sc.callId) || [];
         const parties = call.parties || [];
+        const callDate = call.started?.split('T')[0] || '';
+        const callTitle = call.title || sc.callId;
 
         // Build speaker classifier
         const speakerInternalMap = new Map<string, boolean>();
@@ -246,7 +262,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         }
         const speakerClassifier = (speakerId: string) => speakerInternalMap.get(speakerId) ?? true;
 
-        // Build speaker map for name/title resolution in transcript analysis
+        // Build speaker map for name/title resolution in transcript surgery
         const speakerMap: Record<string, { name: string; title: string }> = {};
         for (const p of parties) {
           const id = p.speakerId || p.userId || p.id;
@@ -254,6 +270,29 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
             speakerMap[id] = { name: p.name, title: p.title || p.jobTitle || '' };
           }
         }
+
+        // Build speaker directory for attribution (passed to run route)
+        const isExternal = (p: any) => !isInternalParty(p, internalDomains);
+        const speakerDirectory = parties
+          .map((p: any) => {
+            const affiliation = p.affiliation || p.company || '';
+            // Gong often leaves affiliation empty or as "External" for prospects.
+            // Fall back to the call's account name for external speakers.
+            const company =
+              affiliation && affiliation.toLowerCase() !== 'external'
+                ? affiliation
+                : isExternal(p)
+                ? call.accountName || affiliation
+                : affiliation;
+            return {
+              speakerId: p.speakerId || p.userId || p.id,
+              name: p.name || '',
+              jobTitle: p.title || p.jobTitle || '',
+              company,
+              isInternal: isInternalParty(p, internalDomains),
+            };
+          })
+          .filter((s: any) => s.speakerId && s.name);
 
         // Build utterances + align trackers
         const utterances = buildUtterances(monologues, speakerClassifier);
@@ -299,8 +338,8 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         const trackerNames = [...new Set(utterances.flatMap(u => u.trackers))];
         const callDataStr = formatExcerptsForAnalysis(
           surgery.excerpts,
-          call.title,
-          call.started?.split('T')[0] || '',
+          callTitle,
+          callDate,
           call.accountName || '',
           call.talkRatio != null ? Math.round(call.talkRatio * 100) : 0,
           trackerNames,
@@ -308,27 +347,48 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
           call.keyPoints || []
         );
 
-        allProcessedData.push(callDataStr);
-        totalTokens += estimateInputTokens(callDataStr);
+        // Prepend speaker directory to processed data for follow-up context
+        const externalSpeakers = speakerDirectory.filter((s: any) => !s.isInternal);
+        const speakerHeader =
+          externalSpeakers.length > 0
+            ? `External speakers:\n${externalSpeakers
+                .map(
+                  (s: any) =>
+                    `- ${s.name}${s.jobTitle ? `, ${s.jobTitle}` : ''}${s.company ? ` at ${s.company}` : ''}`
+                )
+                .join('\n')}\n\n`
+            : '';
+
+        const enrichedCallData = `${speakerHeader}${callDataStr}`;
+        allProcessedData.push(enrichedCallData);
+        totalTokens += estimateInputTokens(enrichedCallData);
 
         // Budget check
         if (totalTokens > TOKEN_BUDGET) {
-          setError(`Token budget exceeded (${totalTokens.toLocaleString()} / ${TOKEN_BUDGET.toLocaleString()}). Analysis stopped.`);
+          setError(
+            `Token budget exceeded (${totalTokens.toLocaleString()} / ${TOKEN_BUDGET.toLocaleString()}). Analysis stopped.`
+          );
           break;
         }
 
-        // Run analysis
+        // Run analysis for this call — pass speaker directory for attribution
         const runRes = await fetch('/api/analyze/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question, callData: callDataStr }),
+          body: JSON.stringify({
+            question,
+            callData: enrichedCallData,
+            speakerDirectory,
+            callMeta: { title: callTitle, date: callDate },
+          }),
         });
         const runData = await runRes.json();
         if (!runRes.ok) throw new Error(runData.error || `Analysis failed for call ${sc.callId}`);
 
         allCallFindings.push({
           callId: sc.callId,
-          callTitle: call.title,
+          callTitle,
+          callDate,
           account: call.accountName || '',
           findings: runData.findings || [],
         });
@@ -337,18 +397,34 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
       setCallFindings(allCallFindings);
       setProcessedDataCache(allProcessedData.join('\n\n---\n\n'));
 
-      // Step 3: Cross-call synthesis
-      if (allCallFindings.some(cf => cf.findings.length > 0)) {
-        setAnalysisProgress('Synthesizing themes across calls...');
+      // Step 3: Synthesize into a direct answer with sourced quotes
+      if (allCallFindings.some(cf => cf.findings.some(f => f.is_external))) {
+        setAnalysisProgress('Synthesizing answer...');
         const synthRes = await fetch('/api/analyze/synthesize', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question, allFindings: allCallFindings }),
+          body: JSON.stringify({
+            question,
+            allFindings: allCallFindings,
+          }),
         });
         const synthData = await synthRes.json();
         if (!synthRes.ok) throw new Error(synthData.error || 'Synthesis failed');
-        setThemes(synthData.themes || []);
-        setOverallSummary(synthData.overall_summary || '');
+
+        const firstEntry: QAEntry = {
+          question,
+          answer: synthData.answer || 'No answer generated.',
+          quotes: synthData.quotes || [],
+        };
+        setConversation([firstEntry]);
+      } else {
+        setConversation([
+          {
+            question,
+            answer: 'No relevant statements from external speakers were found in the analyzed calls.',
+            quotes: [],
+          },
+        ]);
       }
 
       setTokensUsed(totalTokens);
@@ -364,7 +440,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
   // ─── Follow-up questions ────────────────────────────────────────────────
 
   const handleFollowUp = useCallback(async () => {
-    if (!followUpInput.trim() || followUps.length >= 10 || !processedDataCache) return;
+    if (!followUpInput.trim() || conversation.length >= MAX_QUESTIONS || !processedDataCache) return;
     setFollowUpLoading(true);
 
     try {
@@ -381,54 +457,48 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
-      setFollowUps(prev => [...prev, {
+      const newEntry: QAEntry = {
         question: followUpInput,
         answer: data.answer || 'No answer generated.',
-        supporting_quotes: data.supporting_quotes || [],
-      }]);
+        quotes: data.quotes || [],
+      };
+      setConversation(prev => [...prev, newEntry]);
       setFollowUpInput('');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
     } finally {
       setFollowUpLoading(false);
     }
-  }, [followUpInput, followUps, processedDataCache, question, callFindings]);
+  }, [followUpInput, conversation, processedDataCache, question, callFindings]);
 
   // ─── Export ─────────────────────────────────────────────────────────────
 
   const handleExportJSON = () => {
     const exportDate = new Date().toISOString().split('T')[0];
-    const payload = {
-      question,
-      exportDate,
-      summary: overallSummary,
-      themes,
-      callFindings,
-      followUpAnswers: followUps,
-    };
+    const payload = { exportDate, conversation };
     downloadBlob(
       JSON.stringify(payload, null, 2),
-      `gongwizard-findings-${exportDate}.json`,
+      `gongwizard-analysis-${exportDate}.json`,
       'application/json'
     );
   };
 
   const handleExportCSV = () => {
-    const headers = ['Call Title', 'Account', 'Finding Type', 'Significance', 'Quote', 'Timestamp', 'Context'];
-    const rows = callFindings.flatMap(cf =>
-      cf.findings.map(f => [
-        escapeCSV(cf.callTitle),
-        escapeCSV(cf.account),
-        escapeCSV(f.finding_type),
-        escapeCSV(f.significance),
-        escapeCSV(f.exact_quote),
-        escapeCSV(f.timestamp),
-        escapeCSV(f.context),
+    const headers = ['Question', 'Quote', 'Speaker', 'Job Title', 'Company', 'Call', 'Date'];
+    const rows = conversation.flatMap(entry =>
+      entry.quotes.map(q => [
+        escapeCSV(entry.question),
+        escapeCSV(q.quote),
+        escapeCSV(q.speaker_name),
+        escapeCSV(q.job_title),
+        escapeCSV(q.company),
+        escapeCSV(q.call_title),
+        escapeCSV(q.call_date),
       ])
     );
     const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
     const exportDate = new Date().toISOString().split('T')[0];
-    downloadBlob(csv, `gongwizard-findings-${exportDate}.csv`, 'text/csv');
+    downloadBlob(csv, `gongwizard-analysis-${exportDate}.csv`, 'text/csv');
   };
 
   // ─── Reset ──────────────────────────────────────────────────────────────
@@ -438,24 +508,35 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
     setQuestion('');
     setScoredCalls([]);
     setCallFindings([]);
-    setThemes([]);
-    setOverallSummary('');
-    setFollowUps([]);
+    setConversation([]);
     setFollowUpInput('');
     setProcessedDataCache('');
     setTokensUsed(0);
     setError('');
-    setExpandedCalls(new Set());
   };
 
   // ─── Render ─────────────────────────────────────────────────────────────
 
   if (selectedCalls.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 py-10">
-        <Sparkles className="size-8 opacity-50" />
-        <p className="text-sm font-medium">Select calls to analyze</p>
-        <p className="text-xs text-center">Choose calls from the list, then ask a research question</p>
+      <div className="space-y-3 py-4">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          How it works
+        </p>
+        <ol className="space-y-2.5 text-xs text-muted-foreground">
+          <li className="flex gap-2">
+            <span className="text-primary font-bold shrink-0">1.</span>
+            Set a date range and load your calls
+          </li>
+          <li className="flex gap-2">
+            <span className="text-primary font-bold shrink-0">2.</span>
+            Filter or select the calls you care about
+          </li>
+          <li className="flex gap-2">
+            <span className="text-primary font-bold shrink-0">3.</span>
+            Ask a question — get sourced answers with exact quotes
+          </li>
+        </ol>
       </div>
     );
   }
@@ -486,7 +567,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Research Question
+              Your Question
             </Label>
             <Input
               placeholder="What objections are customers raising about pricing?"
@@ -518,9 +599,9 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
             disabled={!question.trim() || stage === 'scoring'}
           >
             {stage === 'scoring' ? (
-              <><Loader2 className="size-3.5 animate-spin" /> Scoring…</>
+              <><Loader2 className="size-3.5 animate-spin" /> Scoring calls…</>
             ) : (
-              <><Search className="size-3.5" /> Score Calls</>
+              <><Search className="size-3.5" /> Find Relevant Calls</>
             )}
           </Button>
         </div>
@@ -534,7 +615,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
               Relevance Scores
             </Label>
             <p className="text-xs text-muted-foreground">
-              Deselect low-scoring calls before analysis
+              Deselect low-scoring calls before analyzing
             </p>
           </div>
 
@@ -606,162 +687,61 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         </div>
       )}
 
-      {/* Stage: Results */}
+      {/* Stage: Results — chat-style Q&A */}
       {stage === 'results' && (
         <div className="space-y-4">
-          {/* Token usage */}
+          {/* Toolbar */}
           <div className="flex items-center justify-between">
-            <div className="text-xs text-muted-foreground">
-              Tokens used: {tokensUsed.toLocaleString()} / {TOKEN_BUDGET.toLocaleString()}
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={handleExportJSON}>
-                <Download className="h-3.5 w-3.5 mr-1" /> JSON
+            <p className="text-xs text-muted-foreground">
+              {conversation.length} of {MAX_QUESTIONS} questions used
+            </p>
+            <div className="flex gap-1.5">
+              <Button variant="outline" size="sm" onClick={handleExportJSON} className="h-7 text-xs px-2">
+                <Download className="h-3 w-3 mr-1" /> JSON
               </Button>
-              <Button variant="outline" size="sm" onClick={handleExportCSV}>
-                <Download className="h-3.5 w-3.5 mr-1" /> CSV
+              <Button variant="outline" size="sm" onClick={handleExportCSV} className="h-7 text-xs px-2">
+                <Download className="h-3 w-3 mr-1" /> CSV
               </Button>
             </div>
           </div>
 
-          {/* Overall summary */}
-          {overallSummary && (
-            <Card>
-              <CardContent className="p-3">
-                <p className="text-xs font-semibold text-muted-foreground mb-1">Summary</p>
-                <p className="text-sm">{overallSummary}</p>
-              </CardContent>
-            </Card>
-          )}
-
-          <Separator />
-
-          {/* Results tabs */}
-          <Tabs defaultValue="themes">
-            <TabsList className="w-full h-8">
-              <TabsTrigger value="themes" className="flex-1 text-xs gap-1">
-                <BarChart3 className="size-3" />
-                Themes
-              </TabsTrigger>
-              <TabsTrigger value="calls" className="flex-1 text-xs gap-1">
-                <MessageSquare className="size-3" />
-                By Call
-              </TabsTrigger>
-            </TabsList>
-
-            {/* Themes tab */}
-            <TabsContent value="themes" className="mt-3">
-              <ScrollArea className="max-h-[400px]">
-                <div className="space-y-3">
-                  {themes.length === 0 && (
-                    <p className="text-xs text-muted-foreground text-center py-4">
-                      No cross-call themes identified
-                    </p>
-                  )}
-                  {themes.map((theme, i) => (
-                    <Card key={i}>
-                      <CardContent className="p-3 space-y-2">
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm font-semibold flex-1">{theme.theme}</p>
-                          <Badge variant="secondary" className="text-xs">
-                            {theme.frequency} calls
-                          </Badge>
-                        </div>
-                        <div className="space-y-1">
-                          {theme.representative_quotes.map((q, qi) => (
-                            <p key={qi} className="text-xs text-muted-foreground italic">
-                              &ldquo;{q}&rdquo;
-                            </p>
-                          ))}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+          {/* Conversation */}
+          <div className="space-y-5">
+            {conversation.map((entry, i) => (
+              <div key={i} className="space-y-2">
+                {/* Question */}
+                <div className="flex gap-2">
+                  <span className="text-[10px] font-bold text-primary shrink-0 mt-0.5">
+                    Q{i + 1}
+                  </span>
+                  <p className="text-xs font-semibold leading-relaxed">{entry.question}</p>
                 </div>
-              </ScrollArea>
-            </TabsContent>
 
-            {/* By Call tab */}
-            <TabsContent value="calls" className="mt-3">
-              <ScrollArea className="max-h-[400px]">
-                <div className="space-y-2">
-                  {callFindings.map(cf => (
-                    <div key={cf.callId} className="border rounded-md">
-                      <button
-                        className="w-full flex items-center gap-2 p-2 text-left hover:bg-muted/50"
-                        onClick={() => toggleCallExpanded(cf.callId)}
-                      >
-                        {expandedCalls.has(cf.callId) ? (
-                          <ChevronDown className="size-3.5 shrink-0" />
-                        ) : (
-                          <ChevronRight className="size-3.5 shrink-0" />
-                        )}
-                        <span className="text-xs font-medium flex-1 truncate">{cf.callTitle}</span>
-                        <Badge variant="outline" className="text-[10px] shrink-0">
-                          {cf.findings.length} findings
-                        </Badge>
-                      </button>
-                      {expandedCalls.has(cf.callId) && (
-                        <div className="px-3 pb-3 space-y-2">
-                          {cf.findings.length === 0 && (
-                            <p className="text-xs text-muted-foreground">No findings</p>
-                          )}
-                          {cf.findings.map((f, fi) => (
-                            <div key={fi} className="space-y-1 pl-2 border-l-2 border-primary/20">
-                              <div className="flex items-center gap-1.5">
-                                <Badge
-                                  variant={f.significance === 'high' ? 'default' : 'secondary'}
-                                  className="text-[10px] px-1 py-0"
-                                >
-                                  {f.significance}
-                                </Badge>
-                                <Badge variant="outline" className="text-[10px] px-1 py-0">
-                                  {f.finding_type}
-                                </Badge>
-                                <span className="text-[10px] text-muted-foreground">{f.timestamp}</span>
-                              </div>
-                              <p className="text-xs italic">&ldquo;{f.exact_quote}&rdquo;</p>
-                              {f.context && (
-                                <p className="text-[10px] text-muted-foreground">{f.context}</p>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </ScrollArea>
-            </TabsContent>
-          </Tabs>
+                {/* Answer */}
+                <div className="pl-4 space-y-2">
+                  <p className="text-xs text-foreground leading-relaxed">{entry.answer}</p>
 
-          <Separator />
-
-          {/* Follow-up questions */}
-          <div className="space-y-2">
-            <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Follow-Up Questions ({followUps.length}/10)
-            </Label>
-
-            {followUps.map((fu, i) => (
-              <Card key={i}>
-                <CardContent className="p-2 space-y-1">
-                  <p className="text-xs font-medium">{fu.question}</p>
-                  <p className="text-xs text-muted-foreground">{fu.answer}</p>
-                  {fu.supporting_quotes.length > 0 && (
-                    <div className="space-y-0.5 mt-1">
-                      {fu.supporting_quotes.slice(0, 3).map((sq, qi) => (
-                        <p key={qi} className="text-[10px] italic text-muted-foreground">
-                          &ldquo;{sq.quote}&rdquo; — {sq.call}
-                        </p>
+                  {/* Quotes */}
+                  {entry.quotes.length > 0 && (
+                    <div className="space-y-2 mt-2">
+                      {entry.quotes.map((q, qi) => (
+                        <QuoteCard key={qi} q={q} />
                       ))}
                     </div>
                   )}
-                </CardContent>
-              </Card>
-            ))}
+                </div>
 
-            {followUps.length < 10 && (
+                {i < conversation.length - 1 && <Separator className="mt-3" />}
+              </div>
+            ))}
+          </div>
+
+          {/* Follow-up input */}
+          {conversation.length < MAX_QUESTIONS ? (
+            <div className="space-y-1.5 pt-1">
+              <p className="text-[10px] text-muted-foreground">
+                {MAX_QUESTIONS - conversation.length} question{MAX_QUESTIONS - conversation.length !== 1 ? 's' : ''} remaining
+              </p>
               <div className="flex gap-1.5">
                 <Input
                   placeholder="Ask a follow-up question..."
@@ -785,8 +765,17 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
                   )}
                 </Button>
               </div>
-            )}
-          </div>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground text-center pt-1">
+              Maximum {MAX_QUESTIONS} questions reached. Export your results or start over.
+            </p>
+          )}
+
+          {/* Token info */}
+          <p className="text-[10px] text-muted-foreground text-right">
+            {tokensUsed.toLocaleString()} / {TOKEN_BUDGET.toLocaleString()} tokens
+          </p>
         </div>
       )}
     </div>

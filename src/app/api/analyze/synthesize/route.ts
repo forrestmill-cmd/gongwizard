@@ -7,60 +7,75 @@ export async function POST(request: NextRequest) {
     const { question, allFindings } = body;
 
     if (!question || !allFindings || !Array.isArray(allFindings)) {
-      return NextResponse.json(
-        { error: 'question and allFindings[] are required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'question and allFindings[] are required' }, { status: 400 });
     }
 
-    // allFindings is array of { callId, callTitle, account, findings[] }
+    // allFindings: [{ callId, callTitle, callDate, account, findings[] }]
+    // findings now include: exact_quote, speaker_name, job_title, company, is_external, timestamp, context
     const findingsSummary = allFindings
-      .filter((cf: any) => cf.findings && cf.findings.length > 0)
+      .filter((cf: any) => cf.findings?.some((f: any) => f.is_external))
       .map((cf: any) => {
-        const findingTexts = cf.findings
-          .map((f: any, i: number) =>
-            `  ${i + 1}. [${f.significance}] "${f.exact_quote}" (${f.finding_type}) — ${f.context}`
+        const externalFindings = cf.findings.filter((f: any) => f.is_external);
+        const findingTexts = externalFindings
+          .map(
+            (f: any) =>
+              `  - "${f.exact_quote}" — ${f.speaker_name}${f.job_title ? `, ${f.job_title}` : ''}${f.company ? ` at ${f.company}` : ''}`
           )
           .join('\n');
-        return `Call: ${cf.callTitle} (${cf.account})\n${findingTexts}`;
+        return `Call: "${cf.callTitle}" | Date: ${cf.callDate || 'Unknown'} | Account: ${cf.account}\n${findingTexts}`;
       })
       .join('\n\n');
 
     if (!findingsSummary) {
       return NextResponse.json({
-        themes: [],
-        summary: 'No relevant findings were identified across the analyzed calls.',
+        answer:
+          'No relevant statements from external speakers were found in the analyzed calls.',
+        quotes: [],
       });
     }
 
     const prompt = `Research question: "${question}"
 
-All findings across ${allFindings.length} calls:
+Evidence from ${allFindings.length} analyzed calls (external speaker quotes only):
 
 ${findingsSummary}
 
-Synthesize cross-call themes. For each theme:
-- theme: Short name for the pattern
-- frequency: How many calls exhibit this pattern
-- representative_quotes: 2-3 best verbatim quotes illustrating the theme
-- call_ids: Which calls contain this theme
+Answer the research question directly and concisely in 2-4 sentences. Then select the most relevant supporting verbatim quotes from the evidence above.
 
-Also provide an overall_summary (2-3 sentences).
+For each quote, preserve ALL attribution data exactly as shown: speaker name, job title, company, call title, call date.
 
-Return JSON: { "themes": [{ "theme": "", "frequency": 0, "representative_quotes": [], "call_ids": [] }], "overall_summary": "" }`;
+Return JSON:
+{
+  "answer": "Direct 2-4 sentence answer to the research question",
+  "quotes": [
+    {
+      "quote": "verbatim text exactly as it appears in the evidence above",
+      "speaker_name": "full name",
+      "job_title": "their title or empty string if unknown",
+      "company": "their company or empty string if unknown",
+      "call_title": "the call title",
+      "call_date": "the call date"
+    }
+  ]
+}
+
+Include at least 1 quote if any external speaker evidence exists. Do not paraphrase — all quotes must be verbatim from the evidence above.`;
 
     const result = await smartCompleteJSON<{
-      themes: Array<{
-        theme: string;
-        frequency: number;
-        representative_quotes: string[];
-        call_ids: string[];
+      answer: string;
+      quotes: Array<{
+        quote: string;
+        speaker_name: string;
+        job_title: string;
+        company: string;
+        call_title: string;
+        call_date: string;
       }>;
-      overall_summary: string;
     }>(prompt, {
       temperature: 0.3,
       maxTokens: 4096,
-      systemPrompt: 'You are a senior sales analyst synthesizing patterns across multiple customer calls. Identify recurring themes, not one-off mentions. Use exact quotes from the data.',
+      systemPrompt:
+        'You are a research assistant synthesizing evidence from sales call transcripts. Answer questions directly. Support answers with verbatim quotes exclusively from external/prospect speakers. Preserve all attribution data exactly — speaker name, job title, company, call title, and date.',
     });
 
     return NextResponse.json(result);

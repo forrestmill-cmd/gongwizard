@@ -17,30 +17,45 @@ export async function POST(request: NextRequest) {
 
 Follow-up question: "${followUpQuestion}"
 
-Processed call data:
+Call evidence (external speaker quotes, with full attribution):
 ${processedData}
 
-${previousFindings ? `Previous findings:\n${JSON.stringify(previousFindings, null, 2)}` : ''}
+${previousFindings ? `Context from previous answers:\n${JSON.stringify(previousFindings, null, 2)}` : ''}
 
-Answer the follow-up question using ONLY the call data above. Include:
-- Direct quotes from the transcripts where applicable
-- Specific call references (title, account)
-- Quantitative observations (how many calls, frequency)
+Answer the follow-up question using ONLY external speaker quotes from the call evidence above. Never quote internal team members or sales reps.
 
-Return JSON: { "answer": "<detailed answer>", "supporting_quotes": [{ "quote": "", "call": "", "timestamp": "" }], "calls_referenced": [] }`;
+Return JSON:
+{
+  "answer": "Direct 2-4 sentence answer to the follow-up question",
+  "quotes": [
+    {
+      "quote": "verbatim text exactly as it appears in the evidence above",
+      "speaker_name": "full name",
+      "job_title": "their title or empty string if unknown",
+      "company": "their company or empty string if unknown",
+      "call_title": "the call title",
+      "call_date": "the call date"
+    }
+  ]
+}
+
+Include at least 1 quote if relevant external speaker evidence exists. All quotes must be verbatim from the evidence above.`;
 
     const result = await smartCompleteJSON<{
       answer: string;
-      supporting_quotes: Array<{
+      quotes: Array<{
         quote: string;
-        call: string;
-        timestamp: string;
+        speaker_name: string;
+        job_title: string;
+        company: string;
+        call_title: string;
+        call_date: string;
       }>;
-      calls_referenced: string[];
     }>(prompt, {
       temperature: 0.3,
       maxTokens: 4096,
-      systemPrompt: 'You are a sales research assistant answering follow-up questions about analyzed call data. Be precise and cite specific evidence.',
+      systemPrompt:
+        'You are a research assistant answering follow-up questions about analyzed call transcripts. Be precise. Only cite external/prospect speakers — never internal team members. Preserve all attribution data exactly: speaker name, job title, company, call title, and date.',
     });
 
     return NextResponse.json(result);

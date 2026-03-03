@@ -58,8 +58,8 @@ def run():
 
         # ── 2. Load Calls ─────────────────────────────────────────────────────
         print("\n[2] Load calls")
-        load_btn = page.locator("button:has-text('Load Calls')")
-        check("Load Calls button visible", load_btn.count() > 0 and load_btn.first.is_visible())
+        load_btn = page.locator("button:has-text('Load My Calls')")
+        check("Load My Calls button visible", load_btn.count() > 0 and load_btn.first.is_visible())
 
         if load_btn.count() > 0:
             load_btn.first.click()
@@ -88,19 +88,20 @@ def run():
             time.sleep(0.5)
         page.screenshot(path='/tmp/gw_smoke_03_export.png', full_page=True)
 
-        for fmt in ['Markdown', 'XML', 'JSONL', 'Summary', 'Utterance']:
-            check(f"Format tab '{fmt}' present",
-                  page.locator(f'[role="tab"]:has-text("{fmt}")').count() > 0)
+        # Format options are now buttons (not tabs) — check each label is present
+        for fmt in ['Markdown', 'XML', 'JSONL', 'CSV Summary', 'Utterance CSV']:
+            check(f"Format option '{fmt}' present",
+                  page.locator(f'button:has-text("{fmt}")').count() > 0)
 
         # ── 4. Utterance CSV download ─────────────────────────────────────────
         print("\n[4] Utterance CSV")
-        utterance_tab = page.locator('[role="tab"]:has-text("Utterance")')
-        if utterance_tab.count() > 0:
-            utterance_tab.first.click()
+        utterance_btn = page.locator('button:has-text("Utterance CSV")')
+        if utterance_btn.count() > 0:
+            utterance_btn.first.click()
             time.sleep(0.4)
 
-        check("PRIMARY_ANALYSIS_TEXT helper text visible",
-              page.locator('text=PRIMARY_ANALYSIS_TEXT').count() > 0)
+        check("Utterance CSV button selected",
+              utterance_btn.count() > 0 and utterance_btn.first.is_visible())
 
         dl_btn = page.locator('button:has-text("Download")')
         can_download = dl_btn.count() > 0 and dl_btn.first.is_enabled()

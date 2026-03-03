@@ -59,12 +59,29 @@ export default function ConnectPage() {
       <div className="w-full max-w-md space-y-6">
         <div className="text-center space-y-2">
           <h1 className="text-3xl font-bold tracking-tight">GongWizard</h1>
-          <p className="text-muted-foreground text-base">Get your Gong calls ready for AI</p>
+          <p className="text-muted-foreground text-base">
+            Ask questions across your Gong call library. Get sourced answers.
+          </p>
+        </div>
+
+        <div className="space-y-2 text-sm text-muted-foreground">
+          <div className="flex items-start gap-2">
+            <span className="text-primary font-bold shrink-0 mt-0.5">→</span>
+            <span>Filter calls by topic, tracker, or keyword</span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="text-primary font-bold shrink-0 mt-0.5">→</span>
+            <span>Ask a question — get verbatim quotes from real conversations</span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="text-primary font-bold shrink-0 mt-0.5">→</span>
+            <span>No copy-pasting into ChatGPT. Answers live here.</span>
+          </div>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-xl">Connect to Gong</CardTitle>
+            <CardTitle className="text-xl">Connect your Gong account</CardTitle>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleConnect} className="space-y-4">
@@ -111,7 +128,7 @@ export default function ConnectPage() {
                   onClick={() => setShowHelp((v) => !v)}
                   className="flex w-full items-center justify-between px-3 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
                 >
-                  How to get these
+                  Where do I find these?
                   {showHelp ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
                 </button>
                 {showHelp && (
@@ -120,7 +137,7 @@ export default function ConnectPage() {
                       <li>Go to your Gong settings → API → API keys</li>
                       <li>Create a new API key or use an existing one</li>
                       <li>Copy the Access Key and Secret Key</li>
-                      <li>Your admin may need to enable API access</li>
+                      <li>Your admin may need to enable API access first</li>
                     </ol>
                   </div>
                 )}
@@ -139,7 +156,7 @@ export default function ConnectPage() {
                     Connecting…
                   </>
                 ) : (
-                  'Connect'
+                  'Access My Calls →'
                 )}
               </Button>
             </form>
@@ -149,7 +166,7 @@ export default function ConnectPage() {
         <div className="flex flex-wrap items-center justify-center gap-4 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <Lock className="size-3.5" />
-            Credentials stored in session only
+            Your credentials stay in this browser tab
           </span>
           <span className="flex items-center gap-1.5">
             <X className="size-3.5" />
@@ -157,7 +174,7 @@ export default function ConnectPage() {
           </span>
           <span className="flex items-center gap-1.5">
             <Shield className="size-3.5" />
-            No server-side storage
+            No accounts, no storage, no email required
           </span>
         </div>
       </div>

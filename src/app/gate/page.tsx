@@ -51,22 +51,22 @@ export default function GatePage() {
       <div className="w-full max-w-md space-y-6">
         <div className="text-center space-y-2">
           <h1 className="text-3xl font-bold tracking-tight">GongWizard</h1>
-          <p className="text-muted-foreground text-base">Get your Gong calls ready for AI</p>
+          <p className="text-muted-foreground text-base">Your Gong call library, one step away.</p>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-xl">Enter Password</CardTitle>
+            <CardTitle className="text-xl">Team access</CardTitle>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="password">Password</Label>
+                <Label htmlFor="password">Access code</Label>
                 <div className="relative">
                   <Input
                     id="password"
                     type={showPassword ? 'text' : 'password'}
-                    placeholder="Site password"
+                    placeholder="Enter access code"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     autoComplete="current-password"
@@ -98,7 +98,7 @@ export default function GatePage() {
                     Verifying…
                   </>
                 ) : (
-                  'Continue'
+                  'Enter →'
                 )}
               </Button>
             </form>
