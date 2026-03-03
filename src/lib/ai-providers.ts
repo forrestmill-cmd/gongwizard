@@ -1,9 +1,8 @@
-// AI provider abstraction — cheap tier (Gemini) + smart tier (GPT-4o)
+// AI provider abstraction — cheap tier (Gemini Flash-Lite) + smart tier (Gemini 2.5 Pro)
 
 import { GoogleGenAI } from '@google/genai';
-import OpenAI from 'openai';
 
-// ─── Cheap tier: Gemini Flash-Lite ──────────────────────────────────────────
+// ─── Shared Gemini client ────────────────────────────────────────────────────
 
 let _gemini: GoogleGenAI | null = null;
 
@@ -16,6 +15,8 @@ function getGemini(): GoogleGenAI {
   return _gemini;
 }
 
+// ─── Cheap tier: Gemini Flash-Lite ──────────────────────────────────────────
+
 export async function cheapComplete(prompt: string, options?: {
   temperature?: number;
   maxTokens?: number;
@@ -23,7 +24,7 @@ export async function cheapComplete(prompt: string, options?: {
 }): Promise<string> {
   const gemini = getGemini();
   const response = await gemini.models.generateContent({
-    model: 'gemini-2.0-flash-lite',
+    model: 'gemini-3.1-flash-lite-preview',
     contents: prompt,
     config: {
       temperature: options?.temperature ?? 0.3,
@@ -36,7 +37,7 @@ export async function cheapComplete(prompt: string, options?: {
   return text;
 }
 
-export async function cheapCompleteJSON<T = any>(prompt: string, options?: {
+export async function cheapCompleteJSON<T = unknown>(prompt: string, options?: {
   temperature?: number;
   maxTokens?: number;
 }): Promise<T> {
@@ -45,18 +46,7 @@ export async function cheapCompleteJSON<T = any>(prompt: string, options?: {
   return JSON.parse(text);
 }
 
-// ─── Smart tier: GPT-4o ─────────────────────────────────────────────────────
-
-let _openai: OpenAI | null = null;
-
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    const key = process.env.OPENAI_API_KEY;
-    if (!key) throw new Error('OPENAI_API_KEY not configured');
-    _openai = new OpenAI({ apiKey: key });
-  }
-  return _openai;
-}
+// ─── Smart tier: Gemini 2.5 Pro ─────────────────────────────────────────────
 
 export async function smartComplete(prompt: string, options?: {
   temperature?: number;
@@ -64,27 +54,23 @@ export async function smartComplete(prompt: string, options?: {
   systemPrompt?: string;
   jsonMode?: boolean;
 }): Promise<string> {
-  const openai = getOpenAI();
-  const messages: OpenAI.ChatCompletionMessageParam[] = [];
-  if (options?.systemPrompt) {
-    messages.push({ role: 'system', content: options.systemPrompt });
-  }
-  messages.push({ role: 'user', content: prompt });
-
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o',
-    messages,
-    temperature: options?.temperature ?? 0.3,
-    max_tokens: options?.maxTokens ?? 4096,
-    ...(options?.jsonMode ? { response_format: { type: 'json_object' } } : {}),
+  const gemini = getGemini();
+  const response = await gemini.models.generateContent({
+    model: 'gemini-2.5-pro',
+    contents: prompt,
+    config: {
+      temperature: options?.temperature ?? 0.3,
+      maxOutputTokens: options?.maxTokens ?? 8192,
+      ...(options?.systemPrompt ? { systemInstruction: options.systemPrompt } : {}),
+      ...(options?.jsonMode ? { responseMimeType: 'application/json' } : {}),
+    },
   });
-
-  const text = response.choices[0]?.message?.content ?? '';
+  const text = response.text ?? '';
   if (!text) throw new Error('AI model returned empty response');
   return text;
 }
 
-export async function smartCompleteJSON<T = any>(prompt: string, options?: {
+export async function smartCompleteJSON<T = unknown>(prompt: string, options?: {
   temperature?: number;
   maxTokens?: number;
   systemPrompt?: string;
@@ -101,24 +87,19 @@ export async function* smartStream(prompt: string, options?: {
   maxTokens?: number;
   systemPrompt?: string;
 }): AsyncGenerator<string> {
-  const openai = getOpenAI();
-  const messages: OpenAI.ChatCompletionMessageParam[] = [];
-  if (options?.systemPrompt) {
-    messages.push({ role: 'system', content: options.systemPrompt });
-  }
-  messages.push({ role: 'user', content: prompt });
-
-  const stream = await openai.chat.completions.create({
-    model: 'gpt-4o',
-    messages,
-    temperature: options?.temperature ?? 0.3,
-    max_tokens: options?.maxTokens ?? 4096,
-    stream: true,
+  const gemini = getGemini();
+  const stream = await gemini.models.generateContentStream({
+    model: 'gemini-2.5-pro',
+    contents: prompt,
+    config: {
+      temperature: options?.temperature ?? 0.3,
+      maxOutputTokens: options?.maxTokens ?? 8192,
+      ...(options?.systemPrompt ? { systemInstruction: options.systemPrompt } : {}),
+    },
   });
 
   for await (const chunk of stream) {
-    const delta = chunk.choices[0]?.delta?.content;
-    if (delta) yield delta;
+    const text = chunk.text;
+    if (text) yield text;
   }
 }
-

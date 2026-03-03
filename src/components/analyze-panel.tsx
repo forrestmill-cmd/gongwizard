@@ -239,15 +239,20 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
       const callMap = new Map(allCalls.map(c => [c.id, c]));
       const internalDomains: string[] = session.internalDomains || [];
       const allProcessedData: string[] = [];
-      const allCallFindings: CallFindings[] = [];
+      const callPayloads: Array<{
+        callId: string;
+        callData: string;
+        speakerDirectory: Array<{ speakerId: string; name: string; jobTitle: string; company: string; isInternal: boolean }>;
+        callMeta: { title: string; date: string };
+      }> = [];
 
-      // Step 2: For each call — surgery + smart truncation + analysis
+      // Step 2: For each call — surgery + smart truncation, accumulate payloads
       for (let i = 0; i < activeCalls.length; i++) {
         const sc = activeCalls[i];
         const call = callMap.get(sc.callId);
         if (!call) continue;
 
-        setAnalysisProgress(`Analyzing call ${i + 1} of ${activeCalls.length}: ${call.title}`);
+        setAnalysisProgress('Processing transcripts...');
 
         const monologues = transcriptMap.get(sc.callId) || [];
         const parties = call.parties || [];
@@ -371,28 +376,31 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
           break;
         }
 
-        // Run analysis for this call — pass speaker directory for attribution
-        const runRes = await fetch('/api/analyze/run', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            question,
-            callData: enrichedCallData,
-            speakerDirectory,
-            callMeta: { title: callTitle, date: callDate },
-          }),
-        });
-        const runData = await runRes.json();
-        if (!runRes.ok) throw new Error(runData.error || `Analysis failed for call ${sc.callId}`);
-
-        allCallFindings.push({
+        callPayloads.push({
           callId: sc.callId,
-          callTitle,
-          callDate,
-          account: call.accountName || '',
-          findings: runData.findings || [],
+          callData: enrichedCallData,
+          speakerDirectory,
+          callMeta: { title: callTitle, date: callDate },
         });
       }
+
+      // Step 2b: Single batch request for all calls
+      setAnalysisProgress(`Analyzing ${callPayloads.length} calls...`);
+      const batchRes = await fetch('/api/analyze/batch-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, calls: callPayloads }),
+      });
+      const batchData = await batchRes.json();
+      if (!batchRes.ok) throw new Error(batchData.error || 'Batch analysis failed');
+
+      const allCallFindings: CallFindings[] = callPayloads.map(cp => ({
+        callId: cp.callId,
+        callTitle: cp.callMeta.title,
+        callDate: cp.callMeta.date,
+        account: callMap.get(cp.callId)?.accountName || '',
+        findings: batchData.results?.[cp.callId]?.findings || [],
+      }));
 
       setCallFindings(allCallFindings);
       setProcessedDataCache(allProcessedData.join('\n\n---\n\n'));
