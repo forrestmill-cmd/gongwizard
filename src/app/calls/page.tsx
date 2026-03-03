@@ -246,7 +246,6 @@ export default function CallsPage() {
 
   const [exportFormat, setExportFormat] = useState<'markdown' | 'xml' | 'jsonl' | 'csv' | 'utterance-csv'>('markdown');
   const [exportOpts, setExportOpts] = useState<ExportOptions>({
-    removeFillerGreetings: true,
     condenseMonologues: true,
     includeMetadata: true,
     includeAIBrief: true,
@@ -1070,8 +1069,7 @@ export default function CallsPage() {
                       <div className="space-y-2">
                         {(
                           [
-                            ['removeFillerGreetings', 'Remove filler/greetings'],
-                            ['condenseMonologues', 'Condense internal monologues'],
+                            ['condenseMonologues', 'Truncate long internal turns (150+ words)'],
                             ['includeMetadata', 'Include call metadata'],
                             ['includeAIBrief', 'Include Gong AI brief'],
                             ['includeInteractionStats', 'Include interaction stats'],
