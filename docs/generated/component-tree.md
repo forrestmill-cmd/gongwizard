@@ -1,215 +1,158 @@
 # GongWizard — Component Tree
 
-Generated: 2026-03-02
-
----
-
 ## 1. Page Structure
-
-Routing is handled by Next.js 15 App Router. All pages are client components (`'use client'`). The root layout is a server component.
 
 ```mermaid
 graph TD
-  middleware["src/middleware.ts\n(Edge — gw-auth cookie check)"]
-  layout["src/app/layout.tsx\n(RootLayout — server)"]
-  gate["src/app/gate/page.tsx\n(GatePage — client)"]
-  home["src/app/page.tsx\n(ConnectPage — client)"]
-  calls["src/app/calls/page.tsx\n(CallsPage — client)"]
+    MW[middleware.ts\nEdge: gw-auth cookie check]
+    MW --> GATE[/gate — GatePage\nsrc/app/gate/page.tsx]
+    MW --> ROOT[/ — ConnectPage\nsrc/app/page.tsx]
+    MW --> CALLS[/calls — CallsPage\nsrc/app/calls/page.tsx]
 
-  middleware -->|"no gw-auth cookie → redirect"| gate
-  middleware -->|"cookie present → pass through"| layout
-  layout --> gate
-  layout --> home
-  layout --> calls
+    GATE -->|POST /api/auth| AUTH[/api/auth/route.ts\nSets gw-auth cookie]
+    ROOT -->|POST /api/gong/connect| CONNECT[/api/gong/connect/route.ts]
+    CALLS -->|POST /api/gong/calls| CALLSAPI[/api/gong/calls/route.ts]
+    CALLS -->|POST /api/gong/transcripts| TRANS[/api/gong/transcripts/route.ts]
+    CALLS -->|POST /api/gong/search\nndjson stream| SEARCH[/api/gong/search/route.ts]
+    CALLS -->|POST /api/analyze/score| SCORE[/api/analyze/score/route.ts]
+    CALLS -->|POST /api/analyze/process| PROCESS[/api/analyze/process/route.ts]
+    CALLS -->|POST /api/analyze/run| RUN[/api/analyze/run/route.ts]
+    CALLS -->|POST /api/analyze/batch-run| BATCH[/api/analyze/batch-run/route.ts]
+    CALLS -->|POST /api/analyze/synthesize| SYNTH[/api/analyze/synthesize/route.ts]
+    CALLS -->|POST /api/analyze/followup| FOLLOWUP[/api/analyze/followup/route.ts]
 ```
 
-| Page | File | Layout | Auth Gate | Data Fetching |
-|---|---|---|---|---|
-| Gate (password entry) | `src/app/gate/page.tsx` | `RootLayout` | None (excluded from middleware) | POST `/api/auth` on submit |
-| Connect (Gong credentials) | `src/app/page.tsx` | `RootLayout` | `gw-auth` cookie required | POST `/api/gong/connect` on submit |
-| Calls (browse + export + analyze) | `src/app/calls/page.tsx` | `RootLayout` | `gw-auth` cookie required | POST `/api/gong/calls` on load; POST `/api/gong/transcripts` on export/analyze |
+| Route | File | Layout | Data Fetching |
+|---|---|---|---|
+| `/gate` | `src/app/gate/page.tsx` | `RootLayout` | Client: POST `/api/auth` on form submit |
+| `/` | `src/app/page.tsx` | `RootLayout` | Client: POST `/api/gong/connect` on form submit |
+| `/calls` | `src/app/calls/page.tsx` | `RootLayout` | Client: POST `/api/gong/calls` on mount (reads from sessionStorage); transcripts fetched on export/analyze |
+
+All pages are `'use client'` components. There is one shared layout (`src/app/layout.tsx`) that wraps all pages — it loads Geist and Geist Mono fonts and sets the HTML metadata.
 
 ---
 
 ## 2. Component Hierarchy
 
-### `RootLayout` (`src/app/layout.tsx`)
+### RootLayout (`src/app/layout.tsx`)
 
 ```
 RootLayout
-└── <html lang="en">
-    └── <body> (Geist + Geist_Mono CSS variables, antialiased)
-        └── {children}
+└── {children}  (one of: GatePage | ConnectPage | CallsPage)
 ```
 
-### `GatePage` (`src/app/gate/page.tsx`)
+### GatePage (`src/app/gate/page.tsx`)
 
 ```
 GatePage
-└── <div> (min-h-screen centering wrapper)
-    ├── <h1> "GongWizard"
-    ├── <p> subtitle
-    └── Card
-        ├── CardHeader
-        │   └── CardTitle "Enter Password"
-        └── CardContent
-            └── <form onSubmit={handleSubmit}>
-                ├── Label "Password"
-                ├── Input (type=password/text)
-                ├── <button> (Eye/EyeOff toggle)
-                ├── <p> (error display, conditional)
-                └── Button type="submit" (Loader2 when loading)
+└── Card
+    ├── CardHeader
+    │   └── CardTitle ("Team access")
+    └── CardContent
+        └── <form>
+            ├── Label ("Access code")
+            ├── Input (type=password/text)
+            ├── <button> (Eye/EyeOff toggle)
+            ├── <p> (error message, conditional)
+            └── Button (submit, shows Loader2 when loading)
 ```
 
-### `ConnectPage` (`src/app/page.tsx`)
+### ConnectPage (`src/app/page.tsx`)
 
 ```
 ConnectPage
-└── <div> (min-h-screen centering wrapper)
-    ├── <h1> "GongWizard"
-    ├── <p> subtitle
-    ├── Card
-    │   ├── CardHeader
-    │   │   └── CardTitle "Connect to Gong"
-    │   └── CardContent
-    │       └── <form onSubmit={handleConnect}>
-    │           ├── Label + Input "Access Key"
-    │           ├── Label + Input "Secret Key" (Eye/EyeOff toggle)
-    │           ├── <div> expandable "How to get these" help accordion
-    │           ├── <p> (error display, conditional)
-    │           └── Button type="submit" (Loader2 when loading)
-    └── <div> security badges (Lock, X, Shield icons)
+├── <h1> GongWizard
+├── feature bullet list (3 items)
+├── Card
+│   ├── CardHeader → CardTitle ("Connect your Gong account")
+│   └── CardContent
+│       └── <form>
+│           ├── Label + Input (accessKey)
+│           ├── Label + Input (secretKey) + Eye/EyeOff toggle
+│           ├── collapsible help section (ChevronDown/ChevronUp)
+│           ├── <p> (error, conditional)
+│           └── Button (submit, shows Loader2 when loading)
+└── trust badges row (Lock, X, Shield icons)
 ```
 
-### `CallsPage` (`src/app/calls/page.tsx`)
-
-The calls page is the primary application view. It is a large client component holding all browse, filter, export, and AI-analyze logic.
+### CallsPage (`src/app/calls/page.tsx`)
 
 ```
 CallsPage
-├── (loading state) — spinner
-├── (error state) — error card with reconnect button
-└── (loaded state)
-    └── <div> two-column layout
-        ├── LEFT COLUMN — call list + filters
-        │   ├── Header bar
-        │   │   ├── Title "GongWizard"
-        │   │   ├── Badge (call count)
-        │   │   └── <button> disconnect (LogOut icon)
-        │   ├── Date range pickers (Popover + Calendar, fromDate/toDate)
-        │   ├── WorkspaceFilter (Select or hidden if single workspace)
-        │   ├── Fetch button (RefreshCw icon)
-        │   ├── Filter panel (collapsible, Filter icon)
-        │   │   ├── Input (searchText)
-        │   │   ├── Input (participantSearch)
-        │   │   ├── Input (aiContentSearch)
-        │   │   ├── Checkbox (excludeInternal)
-        │   │   ├── Slider (durationRange)
-        │   │   ├── Slider (talkRatioRange)
-        │   │   ├── Input (minExternalSpeakers)
-        │   │   ├── TrackerFilter (ToggleGroup of tracker badges)
-        │   │   └── TopicFilter (ToggleGroup of topic badges)
-        │   ├── Selection controls (Select All, Clear)
-        │   └── ScrollArea — call list
-        │       └── (per call) call card
-        │           ├── Checkbox (selected)
-        │           ├── call title + date
-        │           ├── Badge (duration)
-        │           ├── Badge (externalSpeakerCount)
-        │           ├── Badge (talkRatio, conditional)
-        │           └── Tooltip (brief preview, conditional)
-        └── RIGHT COLUMN — export + analyze panel
-            ├── Tab switcher: "Export" | "Analyze"
-            ├── Export tab
-            │   ├── ToggleGroup (format: markdown/xml/jsonl/csv)
-            │   ├── ExportOptions checkboxes
-            │   │   ├── Checkbox removeFillerGreetings
-            │   │   ├── Checkbox condenseMonologues
-            │   │   ├── Checkbox includeMetadata
-            │   │   ├── Checkbox includeAIBrief
-            │   │   └── Checkbox includeInteractionStats
-            │   ├── Token estimate display (contextLabel + contextColor)
-            │   ├── Button "Export File" (Download icon)
-            │   ├── Button "Copy to Clipboard" (Copy/Check icon)
-            │   └── Button "Export ZIP" (Archive icon)
-            └── Analyze tab
-                └── AnalyzePanel (src/components/analyze-panel.tsx)
+├── header bar
+│   ├── title + session info
+│   └── Button (disconnect / clear session)
+├── date range + workspace selector
+│   ├── Input (fromDate)
+│   ├── Input (toDate)
+│   ├── <select> (workspaceId)
+│   └── Button (load calls)
+├── [when calls loaded] filter sidebar
+│   ├── Input (searchText)
+│   ├── Input (participantSearch)
+│   ├── Input (aiContentSearch)
+│   ├── Checkbox (excludeInternal)
+│   ├── Slider (durationRange)
+│   ├── Slider (talkRatioRange)
+│   ├── Input (minExternalSpeakers)
+│   ├── tracker checkboxes (Badge per tracker)
+│   ├── topic checkboxes (Badge per topic)
+│   └── Button (reset filters)
+├── [when calls loaded] calls list
+│   ├── select-all Checkbox
+│   ├── per-call row (Checkbox + metadata + Badge list)
+│   └── pagination controls
+├── [when calls loaded] export/analyze panel (Tabs)
+│   ├── TabsList
+│   │   ├── TabsTrigger ("Export")
+│   │   └── TabsTrigger ("Analyze")
+│   ├── TabsContent "Export"
+│   │   ├── format selector buttons (md / xml / jsonl / csv / utterance-csv)
+│   │   ├── export option checkboxes
+│   │   ├── token estimate (contextColor / contextLabel)
+│   │   ├── transcript keyword search section
+│   │   │   ├── Input (keyword)
+│   │   │   └── Button (search, streams from /api/gong/search)
+│   │   └── action buttons (Export File, Copy, Export ZIP)
+│   └── TabsContent "Analyze"
+│       └── AnalyzePanel
 ```
 
-### `AnalyzePanel` (`src/components/analyze-panel.tsx`)
-
-Rendered inside the Analyze tab. Manages a four-stage state machine: `idle → scoring → scored → analyzing → results`.
+### AnalyzePanel (`src/components/analyze-panel.tsx`)
 
 ```
 AnalyzePanel
-├── (stage=idle|scoring) question input stage
-│   ├── Label "Research Question"
-│   ├── Input (question text)
-│   ├── <div> QUESTION_TEMPLATES quick-fill buttons
-│   │   └── Button × 5 (Objections, Needs, Competitive, Feedback, Questions)
-│   └── Button "Score Calls" (Search icon / Loader2)
-├── (stage=scored) relevance review stage
-│   ├── Label "Relevance Scores"
-│   ├── ScrollArea — scored call list
-│   │   └── (per call) <div>
-│   │       ├── Checkbox (selected toggle)
-│   │       ├── Badge (score/10)
-│   │       └── reason text
-│   ├── selection count display
-│   └── Button "Analyze N Calls" (Sparkles icon)
-├── (stage=analyzing) progress display
-│   └── Loader2 + analysisProgress text
-└── (stage=results) results display
-    ├── token usage bar
-    ├── Button "JSON" export (Download icon)
-    ├── Button "CSV" export (Download icon)
-    ├── Card (overallSummary)
-    ├── Separator
-    ├── Tabs (defaultValue="themes")
-    │   ├── TabsList
-    │   │   ├── TabsTrigger "Themes" (BarChart3 icon)
-    │   │   └── TabsTrigger "By Call" (MessageSquare icon)
-    │   ├── TabsContent "themes"
-    │   │   └── ScrollArea
-    │   │       └── (per theme) Card
-    │   │           ├── theme name + Badge (frequency)
-    │   │           └── representative_quotes list
-    │   └── TabsContent "calls"
-    │       └── ScrollArea
-    │           └── (per call) collapsible call row
-    │               ├── <button> expand toggle (ChevronDown/ChevronRight)
-    │               ├── call title
-    │               ├── Badge (findings count)
-    │               └── (expanded) findings list
-    │                   └── (per finding) <div>
-    │                       ├── Badge (significance)
-    │                       ├── Badge (finding_type)
-    │                       ├── timestamp
-    │                       ├── exact_quote (italic)
-    │                       └── context
-    ├── Separator
-    └── follow-up questions section
-        ├── Label "Follow-Up Questions (N/10)"
-        ├── (per follow-up) Card
-        │   ├── question text
-        │   ├── answer text
-        │   └── supporting_quotes list (up to 3)
-        └── follow-up input row
-            ├── Input (followUpInput)
-            └── Button (Send / Loader2)
+├── question Input + QUESTION_TEMPLATES shortcut buttons
+├── Button ("Score Calls" → /api/analyze/score)
+├── [stage=scored] scored calls list
+│   ├── per-call row: Checkbox + score Badge + reason text
+│   └── Button ("Analyze Selected")
+├── [stage=analyzing] progress text + Loader2
+└── [stage=results]
+    ├── ScrollArea
+    │   ├── synthesis answer block
+    │   ├── QuoteCard list (supporting quotes)
+    │   ├── per-call findings section
+    │   │   └── per-finding: Badge (significance) + exact_quote + attribution
+    │   ├── follow-up Input + Send Button
+    │   ├── QAEntry conversation history
+    │   │   └── per-entry: question + answer + QuoteCard list
+    │   └── Download Button (CSV export of findings)
+    └── [error state] error message
 ```
 
 ---
 
 ## 3. Component Reference
 
-### `GatePage`
+### GatePage
 
 **File:** `src/app/gate/page.tsx`
 
-**Props:** None (page component)
+**Props:** none (default export page)
 
 **State managed:**
+
 - `password: string`
 - `showPassword: boolean`
 - `loading: boolean`
@@ -218,19 +161,21 @@ AnalyzePanel
 **Hooks used:** `useState`, `useRouter` (next/navigation)
 
 **API calls:**
-- `POST /api/auth` — validates password, sets `gw-auth` cookie; on success redirects to `/`
 
-**Children rendered:** `Card`, `CardContent`, `CardHeader`, `CardTitle`, `Input`, `Label`, `Button` (shadcn/ui); `Eye`, `EyeOff`, `Loader2` (lucide-react)
+- `POST /api/auth` — body: `{ password }` — on success sets `gw-auth` cookie, redirects to `/`
+
+**Children rendered:** `Card`, `CardHeader`, `CardTitle`, `CardContent`, `Input`, `Label`, `Button`, `Eye`/`EyeOff`/`Loader2` (lucide-react)
 
 ---
 
-### `ConnectPage`
+### ConnectPage
 
 **File:** `src/app/page.tsx`
 
-**Props:** None (page component)
+**Props:** none (default export page)
 
 **State managed:**
+
 - `accessKey: string`
 - `secretKey: string`
 - `showSecret: boolean`
@@ -241,227 +186,209 @@ AnalyzePanel
 **Hooks used:** `useState`, `useRouter`
 
 **API calls:**
-- `POST /api/gong/connect` with `X-Gong-Auth: btoa(accessKey:secretKey)` — on success saves `{users, trackers, workspaces, internalDomains, baseUrl, authHeader}` to `sessionStorage['gongwizard_session']` and navigates to `/calls`
 
-**Local functions:** `saveSession(data)` — writes to `sessionStorage`
+- `POST /api/gong/connect` with `X-Gong-Auth: btoa(accessKey:secretKey)` — receives `{ users, trackers, workspaces, internalDomains, baseUrl }`, persists via `saveSession()` to `sessionStorage`, redirects to `/calls`
 
-**Children rendered:** `Card`, `CardContent`, `CardHeader`, `CardTitle`, `Input`, `Label`, `Button`; `Eye`, `EyeOff`, `Lock`, `X`, `Shield`, `ChevronDown`, `ChevronUp`, `Loader2`
+**Children rendered:** `Card`, `CardHeader`, `CardTitle`, `CardContent`, `Input`, `Label`, `Button`, `Eye`/`EyeOff`/`Lock`/`X`/`Shield`/`ChevronDown`/`ChevronUp`/`Loader2`
 
 ---
 
-### `CallsPage`
+### CallsPage
 
 **File:** `src/app/calls/page.tsx`
 
-**Props:** None (page component)
+**Props:** none (default export page)
 
 **State managed:**
-- `session: GongSession | null` — loaded from `sessionStorage['gongwizard_session']`
-- `calls: GongCall[]` — fetched call list with computed fields
+
+- `session: GongSession | null` — loaded from `sessionStorage` via `getSession()`
+- `calls: GongCall[]` — full call list
+- `filteredCalls: GongCall[]` — derived from `calls` + filter state (via `useMemo`)
+- `selectedIds: Set<string>`
 - `loading: boolean`
-- `error: string`
-- `fromDate: Date`, `toDate: Date` — date range pickers
-- `selectedWorkspace: string` — workspace filter
-- `selectedIds: Set<string>` — checked calls
-- `exportFormat: 'markdown' | 'xml' | 'jsonl' | 'csv'`
-- `exportOpts: ExportOptions` — filler removal, condense, metadata, brief, stats toggles
+- `loadError: string`
+- `fromDate: string`, `toDate: string`, `workspaceId: string`
+- `exportFormat: 'markdown' | 'xml' | 'jsonl' | 'csv' | 'utterance-csv'`
+- `exportOpts: ExportOptions` — `{ condenseMonologues, includeMetadata, includeAIBrief, includeInteractionStats }`
 - `activeTab: 'export' | 'analyze'`
-- `showFilters: boolean`
-- Filter state (delegated to `useFilterState`)
+- `searchKeyword: string`, `searchResults`, `searchProgress`, `searchLoading`
+- `page: number`
 
 **Hooks used:**
+
 - `useState`, `useEffect`, `useCallback`, `useMemo`
-- `useFilterState` (custom) — all filter field state + localStorage persistence
-- `useCallExport` (custom) — export/copy/zip logic
+- `useFilterState` (`src/hooks/useFilterState.ts`)
+- `useCallExport` (`src/hooks/useCallExport.ts`)
 
-**API calls (via `useCallExport`):**
-- `POST /api/gong/calls` — fetches paginated call list + extensive metadata
-- `POST /api/gong/transcripts` — fetches transcript monologues for selected calls
+**API calls:**
 
-**Key derived values (useMemo):**
-- `filteredCalls` — calls filtered by all active filter predicates from `src/lib/filters.ts`
-- `trackerCounts` — per-tracker hit counts across visible calls
-- `topicCounts` — per-topic hit counts across visible calls
-- `tokenEstimate` — estimated tokens for selected calls (for export UI label)
+- `POST /api/gong/calls` — body: `{ fromDate, toDate, baseUrl, workspaceId }` — fetches full call list with metadata
+- `POST /api/gong/search` — streaming ndjson — body: `{ callIds, keyword, baseUrl }` — emits `progress` / `match` / `done` events
 
-**Children rendered:** `AnalyzePanel`, all shadcn/ui primitives, lucide-react icons
+**Children rendered:** `Card`, `CardContent`, `Badge`, `Button`, `Checkbox`, `Input`, `Label`, `Slider`, `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`, `ScrollArea`, `Separator`, `AnalyzePanel`, lucide-react icons
 
 ---
 
-### `AnalyzePanel`
+### AnalyzePanel
 
 **File:** `src/components/analyze-panel.tsx`
 
-**Props interface:**
+**Props:**
+
 ```typescript
 interface AnalyzePanelProps {
-  selectedCalls: any[];   // GongCall objects for currently checked calls
+  selectedCalls: any[];   // GongCall objects for currently selected calls
   session: any;           // GongSession from sessionStorage
-  allCalls: any[];        // full unfiltered call list (for callMap lookups)
+  allCalls: any[];        // full call list (for callMap lookups)
 }
 ```
 
 **State managed:**
+
 - `question: string`
 - `stage: 'idle' | 'scoring' | 'scored' | 'analyzing' | 'results'`
 - `error: string`
-- `scoredCalls: ScoredCall[]` — calls with 0-10 relevance score + selected flag
+- `scoredCalls: ScoredCall[]` — `{ callId, score, reason, relevantSections, selected }`
 - `callFindings: CallFindings[]` — per-call extracted findings
-- `themes: Theme[]` — cross-call synthesized themes
-- `overallSummary: string`
-- `analysisProgress: string` — progress message during analysis
-- `followUps: FollowUpAnswer[]`
+- `conversation: QAEntry[]` — follow-up Q&A history
+- `analysisProgress: string` — status message during analysis
 - `followUpInput: string`
 - `followUpLoading: boolean`
-- `processedDataCache: string` — formatted transcript excerpts, cached for follow-up questions
+- `processedDataCache: string` — serialized evidence text for follow-up calls
 - `tokensUsed: number`
-- `expandedCalls: Set<string>` — which call rows are expanded in "By Call" tab
 
 **Hooks used:** `useState`, `useCallback`
 
-**API calls:**
-- `POST /api/analyze/score` — scores selected calls 0-10 for relevance
-- `POST /api/gong/transcripts` — fetches transcripts for scored+selected calls
-- `POST /api/analyze/process` — smart truncation of long internal monologues (Gemini Flash-Lite)
-- `POST /api/analyze/run` — per-call finding extraction (GPT-4o)
-- `POST /api/analyze/synthesize` — cross-call theme synthesis (GPT-4o)
-- `POST /api/analyze/followup` — answers follow-up questions (GPT-4o)
+**API calls (in pipeline order):**
 
-**Lib functions used:**
+1. `POST /api/analyze/score` — scores calls for relevance using Gemini Flash-Lite
+2. `POST /api/gong/transcripts` — fetches transcript monologues for selected calls
+3. `POST /api/analyze/process` — smart truncation of long internal monologues (Gemini Flash-Lite)
+4. `POST /api/analyze/batch-run` — batch finding extraction across all calls when within token budget
+5. `POST /api/analyze/run` — single-call finding extraction fallback
+6. `POST /api/analyze/synthesize` — synthesizes findings into a direct answer (Gemini 2.5 Pro)
+7. `POST /api/analyze/followup` — answers follow-up questions from cached evidence (Gemini 2.5 Pro)
+
+**Lib used:**
+
 - `isInternalParty` from `src/lib/format-utils`
 - `buildUtterances`, `alignTrackersToUtterances`, `extractTrackerOccurrences` from `src/lib/tracker-alignment`
 - `performSurgery`, `formatExcerptsForAnalysis` from `src/lib/transcript-surgery`
 
-**Internal types:**
+**Constants:** `TOKEN_BUDGET = 800_000`, `MAX_QUESTIONS = 5`
+
+**Children rendered:** `Button`, `Input`, `Label`, `Badge`, `Card`, `CardContent`, `Checkbox`, `Separator`, `ScrollArea`, `QuoteCard` (inline), lucide-react icons
+
+---
+
+### QuoteCard (inline sub-component of AnalyzePanel)
+
+**File:** `src/components/analyze-panel.tsx` (not exported)
+
+**Props:**
+
 ```typescript
-interface ScoredCall {
-  callId: string;
-  score: number;
-  reason: string;
-  relevantSections: string[];
-  selected: boolean;
-}
-interface Finding {
-  exact_quote: string;
-  timestamp: string;
-  context: string;
-  significance: string;
-  finding_type: string;
-}
-interface CallFindings {
-  callId: string;
-  callTitle: string;
-  account: string;
-  findings: Finding[];
-}
-interface Theme {
-  theme: string;
-  frequency: number;
-  representative_quotes: string[];
-  call_ids: string[];
-}
-interface FollowUpAnswer {
-  question: string;
-  answer: string;
-  supporting_quotes: Array<{ quote: string; call: string; timestamp: string }>;
-}
+{ q: QuoteAttribution }
+// QuoteAttribution = {
+//   quote: string;
+//   speaker_name: string;
+//   job_title: string;
+//   company: string;
+//   call_title: string;
+//   call_date: string;
+// }
 ```
 
-**Children rendered:** `Button`, `Input`, `Label`, `Badge`, `Card`, `CardContent`, `Checkbox`, `Separator`, `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`, `ScrollArea`; `Loader2`, `Search`, `Sparkles`, `ChevronDown`, `ChevronRight`, `MessageSquare`, `BarChart3`, `Send`, `Download`
+Renders a left-bordered quote block with italic quote text, attribution (speaker name + title + company), and source (call title + date).
 
 ---
 
 ## 4. Custom Hooks
 
-### `useFilterState`
+### useFilterState
 
 **File:** `src/hooks/useFilterState.ts`
 
-**Purpose:** Centralizes all call-list filter state. Persists numeric/boolean filters to `localStorage['gongwizard_filters']` so they survive page reloads. Text searches and multi-select sets are session-only (not persisted).
+**Purpose:** Centralizes all call-list filter state. Numeric and boolean filters are persisted to `localStorage` under `gongwizard_filters`. Text searches and set-based filters (trackers, topics) are session-only.
 
-**Parameters:** None
+**Parameters:** none
 
 **Return value:**
+
 ```typescript
 {
-  searchText: string;
-  setSearchText: (v: string) => void;
-  participantSearch: string;
-  setParticipantSearch: (v: string) => void;
-  aiContentSearch: string;
-  setAiContentSearch: (v: string) => void;
-  excludeInternal: boolean;
-  setExcludeInternal: (v: boolean) => void;
-  durationRange: [number, number];
-  setDurationRange: (v: [number, number]) => void;
-  talkRatioRange: [number, number];
-  setTalkRatioRange: (v: [number, number]) => void;
-  minExternalSpeakers: number;
-  setMinExternalSpeakers: (v: number) => void;
-  activeTrackers: Set<string>;
-  toggleTracker: (name: string) => void;
-  activeTopics: Set<string>;
-  toggleTopic: (name: string) => void;
+  // Text searches (not persisted)
+  searchText: string;         setSearchText: (v: string) => void;
+  participantSearch: string;  setParticipantSearch: (v: string) => void;
+  aiContentSearch: string;    setAiContentSearch: (v: string) => void;
+
+  // Boolean (persisted)
+  excludeInternal: boolean;   setExcludeInternal: (v: boolean) => void;
+
+  // Ranges (persisted)
+  durationRange: [number, number];   setDurationRange: (v: [number, number]) => void;
+  talkRatioRange: [number, number];  setTalkRatioRange: (v: [number, number]) => void;
+  minExternalSpeakers: number;       setMinExternalSpeakers: (v: number) => void;
+
+  // Multi-select (not persisted)
+  activeTrackers: Set<string>;  toggleTracker: (name: string) => void;
+  activeTopics: Set<string>;    toggleTopic: (name: string) => void;
+
   resetFilters: () => void;
 }
 ```
 
-**Side effects:** Reads/writes `localStorage['gongwizard_filters']`. Silently ignores errors if localStorage is unavailable.
+**Side effects:**
 
-**Persisted fields:** `excludeInternal`, `durationMin`, `durationMax`, `talkRatioMin`, `talkRatioMax`, `minExternalSpeakers`
+- Reads `localStorage` once on first render (`loadPersistedFilters`)
+- Writes `localStorage` on each persisted filter change (`persistFilters`)
+- Uses `useRef` (`currentFilters`) to read latest values in the persist callback without adding them as dependencies
 
 **Used by:** `CallsPage`
 
 ---
 
-### `useCallExport`
+### useCallExport
 
 **File:** `src/hooks/useCallExport.ts`
 
-**Purpose:** Encapsulates transcript fetch + export logic for all three export actions (single file, clipboard copy, ZIP bundle). Handles the `Speaker` / `FormattedTurn` assembly pipeline.
+**Purpose:** Handles transcript fetch + format + download/copy/zip for the export panel. Builds speaker maps from call parties, sorts sentences by timestamp, groups into `FormattedTurn[]` via `groupTranscriptTurns`, then calls `buildExportContent` for the selected format.
 
 **Parameters:**
+
 ```typescript
 interface UseCallExportParams {
   selectedIds: Set<string>;
-  session: any;                              // GongSession
-  calls: any[];                             // full call list for metadata lookup
-  exportFormat: 'markdown' | 'xml' | 'jsonl' | 'csv';
-  exportOpts: ExportOptions;
+  session: any;                  // GongSession
+  calls: any[];                  // full call list for metadata lookup
+  exportFormat: 'markdown' | 'xml' | 'jsonl' | 'csv' | 'utterance-csv';
+  exportOpts: ExportOptions;     // { condenseMonologues, includeMetadata, includeAIBrief, includeInteractionStats }
 }
 ```
 
 **Return value:**
+
 ```typescript
 {
   exporting: boolean;
   copied: boolean;
-  handleExport: () => Promise<void>;      // download single file
-  handleCopy: () => Promise<void>;        // clipboard
-  handleZipExport: () => Promise<void>;   // ZIP with manifest.json
+  handleExport: () => Promise<void>;      // downloads single file
+  handleCopy: () => Promise<void>;        // writes to clipboard
+  handleZipExport: () => Promise<void>;   // downloads ZIP: manifest.json + calls/<name>.<ext>
 }
 ```
 
 **API calls:**
-- `POST /api/gong/transcripts` (inside `fetchTranscriptsForSelected`) — batched transcript fetch using `selectedIds` and `session.authHeader`
 
-**Lib functions used:**
-- `isInternalParty`, `downloadFile` from `src/lib/format-utils`
-- `groupTranscriptTurns`, `buildExportContent` from `src/lib/transcript-formatter`
-- `downloadZip` from `client-zip` (third-party)
-- `format` from `date-fns`
+- `POST /api/gong/transcripts` with `X-Gong-Auth` header — body: `{ callIds, baseUrl }`
 
 **Side effects:**
-- Triggers browser file download via `URL.createObjectURL` + anchor click (`handleExport`, `handleZipExport`)
-- Writes to clipboard via `navigator.clipboard.writeText` (`handleCopy`)
-- Sets `copied = true` for 2 seconds after clipboard success
 
-**ZIP output structure:**
-```
-manifest.json               (exportDate, callCount, format, calls[])
-calls/
-  <sanitized-title>-<date>.<ext>   (one file per call)
-```
+- `downloadFile()` (`src/lib/browser-utils`) — blob URL + `<a>` click trigger
+- `downloadZip()` (`client-zip` package) — assembles ZIP blob
+- `navigator.clipboard.writeText()`
+
+**Lib used:** `isInternalParty` (format-utils), `groupTranscriptTurns`, `buildExportContent`, `Speaker`, `TranscriptSentence`, `CallForExport`, `ExportOptions` (transcript-formatter)
 
 **Used by:** `CallsPage`
 
@@ -469,40 +396,37 @@ calls/
 
 ## 5. UI Library Notes
 
-**Library:** [shadcn/ui](https://ui.shadcn.com/) — copy-paste component library, not an installed package. All 15 components live directly in `src/components/ui/`.
+**Library:** shadcn/ui — components are code-generated into `src/components/ui/` as plain TypeScript source files (not installed as a runtime package dependency)
 
-**Primitives backing layer:** `radix-ui` (unified package `^1.4.3`) — Dialog, Checkbox, Label, Popover, ScrollArea, Separator, Slider, Tabs, Toggle, ToggleGroup, and Tooltip all delegate to Radix primitives.
+**Primitive layer:** `radix-ui` v1.4.3 — unified package (`import { Checkbox, Slider, Tabs, ... } from 'radix-ui'`)
 
-**Command palette primitive:** `cmdk` (`^1.1.1`) — backs the `Command` component family.
+**Styling:** Tailwind CSS v4. Variant management via `class-variance-authority` (CVA). Class merging via `cn()` utility in `src/lib/utils.ts` (`clsx` + `tailwind-merge`).
 
-**Calendar primitive:** `react-day-picker` (`^9.14.0`) — backs the `Calendar` / `CalendarDayButton` components.
+**Icons:** `lucide-react` v0.575.0
 
-**Styling:** Tailwind CSS v4 (CSS-first config). Class composition via `clsx` + `tailwind-merge` through the `cn()` utility in `src/lib/utils.ts`. CVA (`class-variance-authority`) drives variant logic inside `Badge`, `Button`, `Tabs`, and `Toggle`.
+**Components in `src/components/ui/`:**
 
-**Installed shadcn/ui components:**
-
-| Component | File | Primitives |
+| Component(s) | File | Radix Primitive Used |
 |---|---|---|
-| `Badge` | `src/components/ui/badge.tsx` | CVA, `Slot` (radix-ui) |
-| `Button` | `src/components/ui/button.tsx` | CVA, `Slot` (radix-ui) |
-| `Calendar`, `CalendarDayButton` | `src/components/ui/calendar.tsx` | react-day-picker `DayPicker` |
-| `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter` | `src/components/ui/card.tsx` | Plain divs |
-| `Checkbox` | `src/components/ui/checkbox.tsx` | radix-ui `Checkbox` |
-| `Command`, `CommandDialog`, `CommandInput`, `CommandList`, `CommandEmpty`, `CommandGroup`, `CommandItem`, `CommandSeparator`, `CommandShortcut` | `src/components/ui/command.tsx` | `cmdk` `Command`, wraps `Dialog` |
-| `Dialog`, `DialogTrigger`, `DialogContent`, `DialogHeader`, `DialogFooter`, `DialogTitle`, `DialogDescription`, `DialogOverlay`, `DialogPortal`, `DialogClose` | `src/components/ui/dialog.tsx` | radix-ui `Dialog` |
-| `Input` | `src/components/ui/input.tsx` | Plain `<input>` |
-| `Label` | `src/components/ui/label.tsx` | radix-ui `Label` |
-| `Popover`, `PopoverTrigger`, `PopoverContent`, `PopoverAnchor`, `PopoverHeader`, `PopoverTitle`, `PopoverDescription` | `src/components/ui/popover.tsx` | radix-ui `Popover` |
-| `ScrollArea`, `ScrollBar` | `src/components/ui/scroll-area.tsx` | radix-ui `ScrollArea` |
-| `Separator` | `src/components/ui/separator.tsx` | radix-ui `Separator` |
-| `Slider` | `src/components/ui/slider.tsx` | radix-ui `Slider` |
-| `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent` | `src/components/ui/tabs.tsx` | radix-ui `Tabs`, CVA |
-| `Toggle` | `src/components/ui/toggle.tsx` | radix-ui `Toggle`, CVA |
-| `ToggleGroup`, `ToggleGroupItem` | `src/components/ui/toggle-group.tsx` | radix-ui `ToggleGroup`, shares `toggleVariants` from `toggle.tsx` |
-| `Tooltip`, `TooltipTrigger`, `TooltipContent`, `TooltipProvider` | `src/components/ui/tooltip.tsx` | radix-ui `Tooltip` |
+| `Badge` | `badge.tsx` | `Slot.Root` |
+| `Button` | `button.tsx` | `Slot.Root` |
+| `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter` | `card.tsx` | plain `<div>` |
+| `Checkbox` | `checkbox.tsx` | `Checkbox`, `Checkbox.Indicator` |
+| `Input` | `input.tsx` | plain `<input>` |
+| `Label` | `label.tsx` | `Label.Root` |
+| `ScrollArea`, `ScrollBar` | `scroll-area.tsx` | `ScrollArea.Root`, `ScrollArea.Viewport`, `ScrollArea.Scrollbar`, `ScrollArea.Thumb`, `ScrollArea.Corner` |
+| `Separator` | `separator.tsx` | `Separator.Root` |
+| `Slider` | `slider.tsx` | `Slider.Root`, `Slider.Track`, `Slider.Range`, `Slider.Thumb` |
+| `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent` | `tabs.tsx` | `Tabs.Root`, `Tabs.List`, `Tabs.Trigger`, `Tabs.Content` |
 
-**Fonts:** Geist Sans and Geist Mono loaded via `next/font/google` in `RootLayout`, applied as CSS variables `--font-geist-sans` and `--font-geist-mono`.
+**Badge variants:** `default`, `secondary`, `destructive`, `outline`, `ghost`, `link`
 
-**Icons:** `lucide-react` (`^0.575.0`) — used directly in all pages and `AnalyzePanel`; no wrapper components.
+**Button variants:** `default`, `destructive`, `outline`, `secondary`, `ghost`, `link`
 
-**No custom theme config file.** Tailwind v4 uses a CSS-first approach — theme tokens are defined in `src/app/globals.css` rather than a `tailwind.config.ts`. The `next.config.ts` is intentionally empty with no custom configuration.
+**Button sizes:** `default` (h-9), `xs`, `sm`, `lg`, `icon`, `icon-xs`, `icon-sm`, `icon-lg`
+
+**Tabs list variants:** `default` (pill with background), `line` (underline indicator)
+
+**Fonts:** Geist Sans (`--font-geist-sans`) and Geist Mono (`--font-geist-mono`) loaded via `next/font/google` in `RootLayout` and applied as CSS variables on `<body>`.
+
+**Theme:** No `tailwind.config.js` with custom tokens. Theming is done entirely via Tailwind v4 CSS variables (e.g. `bg-primary`, `text-muted-foreground`) defined in `globals.css`.

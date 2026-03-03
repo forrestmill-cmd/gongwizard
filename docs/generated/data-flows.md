@@ -1,340 +1,366 @@
 # GongWizard — Data Flows
 
-Five major data pipelines in the application, from site authentication through AI-powered call analysis.
+Auto-generated. Regenerate with `/doc-update` from the project root.
 
 ---
 
-## Flow 1: Site Authentication (Gate)
+## Table of Contents
 
-**What it does:** Enforces a site-wide password before any Gong credentials are entered. Every request is checked by edge middleware; unauthenticated users are redirected to `/gate`.
+1. [Site Gate Authentication](#1-site-gate-authentication)
+2. [Gong Credential Connect](#2-gong-credential-connect)
+3. [Call List Fetch](#3-call-list-fetch)
+4. [Transcript Fetch and Export](#4-transcript-fetch-and-export)
+5. [AI Research Pipeline (Analyze Panel)](#5-ai-research-pipeline-analyze-panel)
+6. [Transcript Keyword Search (Streaming)](#6-transcript-keyword-search-streaming)
 
-**Triggered by:** First visit to any page on the site, or when the `gw-auth` cookie is absent or expired.
+---
+
+## 1. Site Gate Authentication
+
+**What it does:** Every request to GongWizard passes through Next.js edge middleware that checks for a `gw-auth` cookie. If absent, the user is redirected to `/gate`. On the gate page the user submits a site password; the API route validates it against `SITE_PASSWORD` and sets a 7-day httpOnly cookie.
+
+**Triggered by:** First visit to any page without a valid `gw-auth` cookie.
 
 ```mermaid
 sequenceDiagram
-    actor User
     participant Browser
     participant Middleware as src/middleware.ts
-    participant AuthRoute as src/app/api/auth/route.ts (POST)
     participant GatePage as src/app/gate/page.tsx
+    participant AuthAPI as src/app/api/auth/route.ts
 
-    User->>Browser: Navigate to any URL
-    Browser->>Middleware: HTTP request (no gw-auth cookie)
-    Middleware-->>Browser: 302 redirect → /gate
-    Browser->>GatePage: Render GatePage
-    User->>GatePage: Enter site password → handleSubmit()
-    GatePage->>AuthRoute: POST /api/auth { password }
-    AuthRoute->>AuthRoute: Compare password vs process.env.SITE_PASSWORD
-    alt Wrong password
-        AuthRoute-->>GatePage: 401 { error: "Incorrect password." }
-        GatePage-->>User: Show error message
-    else Correct password
-        AuthRoute-->>Browser: 200 { ok: true } + Set-Cookie: gw-auth=1 (httpOnly, 7-day)
-        GatePage->>Browser: router.push('/') + router.refresh()
-        Browser->>Middleware: Re-request with gw-auth cookie
-        Middleware-->>Browser: Pass through to destination
+    Browser->>Middleware: GET /
+    Note over Middleware: reads cookie gw-auth
+    Middleware-->>Browser: 302 → /gate (no cookie)
+
+    Browser->>GatePage: GET /gate
+    GatePage-->>Browser: render GatePage form
+
+    Browser->>AuthAPI: POST /api/auth {password}
+    Note over AuthAPI: compares password to process.env.SITE_PASSWORD
+    alt correct password
+        AuthAPI-->>Browser: 200 {ok:true} + Set-Cookie: gw-auth=1; httpOnly; maxAge=604800
+        Browser->>Middleware: GET /
+        Note over Middleware: gw-auth=1 present → allow
+        Middleware-->>Browser: 200 (home page)
+    else wrong password
+        AuthAPI-->>Browser: 401 {error: "Incorrect password."}
+        GatePage-->>Browser: show error message
     end
 ```
 
-### Step-by-step
+**Step-by-step:**
 
-1. **`src/middleware.ts`** — Edge middleware runs on every request. If `gw-auth` cookie is absent, it redirects to `/gate`. Requests to `/gate` and `/api/auth` are excluded from the check.
-2. **`src/app/gate/page.tsx` — `GatePage` / `handleSubmit()`** — User types the site password. On submit, it POSTs to `/api/auth` with `{ password }`.
-3. **`src/app/api/auth/route.ts` — `POST()`** — Compares the submitted password against `process.env.SITE_PASSWORD`. On match, sets an `httpOnly` cookie named `gw-auth` with a 7-day `maxAge`. Returns `{ ok: true }`.
-4. **`GatePage` — `router.push('/')`** — On success, redirects to the home/connect page. Subsequent requests carry the cookie and pass middleware.
+1. `src/middleware.ts` `middleware()` runs on every request. It reads `request.cookies.get('gw-auth')`. If absent and the path is not `/gate`, `/api/auth`, `/api/gong/*`, or `/_next/*`, it redirects to `/gate`.
+2. `src/app/gate/page.tsx` `GatePage` renders a password form. The user submits via `handleSubmit()`.
+3. `handleSubmit()` POSTs `{password}` to `/api/auth`.
+4. `src/app/api/auth/route.ts` `POST()` reads `process.env.SITE_PASSWORD`. On match it calls `response.cookies.set('gw-auth', '1', { httpOnly: true, maxAge: 604800 })` and returns `{ok: true}`.
+5. `GatePage` receives `200` and calls `router.push('/')` followed by `router.refresh()`. Subsequent requests pass middleware because the cookie is present.
 
 ---
 
-## Flow 2: Gong API Connection & Session Initialization
+## 2. Gong Credential Connect
 
-**What it does:** Validates Gong API credentials, fetches users/trackers/workspaces in parallel, derives `internalDomains` from user email addresses, and stores the complete session object in `sessionStorage`.
+**What it does:** The home page (Step 1) collects a Gong API access key and secret key from the user. It constructs an HTTP Basic auth header, then calls the `/api/gong/connect` proxy. The proxy fetches all Gong users, trackers, and workspaces in parallel; derives internal email domains from user records; and returns everything. The client saves this to `sessionStorage` under the key `gongwizard_session`.
 
-**Triggered by:** User submitting their Gong API key and secret on `src/app/page.tsx` (the Connect step).
+**Triggered by:** User submitting API credentials on `src/app/page.tsx`.
 
 ```mermaid
 sequenceDiagram
-    actor User
-    participant ConnectPage as src/app/page.tsx (HomePage)
-    participant ConnectRoute as src/app/api/gong/connect/route.ts (POST)
+    participant User
+    participant HomePage as src/app/page.tsx
+    participant ConnectAPI as src/app/api/gong/connect/route.ts
     participant GongAPI as api.gong.io
 
-    User->>ConnectPage: Enter Access Key + Secret → handleConnect()
-    ConnectPage->>ConnectPage: btoa(key:secret) → authHeader
-    ConnectPage->>ConnectRoute: POST /api/gong/connect<br/>Header: X-Gong-Auth: Basic base64<br/>Body: { baseUrl }
+    User->>HomePage: enter access key + secret key
+    Note over HomePage: btoa(key:secret) → authHeader
+    HomePage->>ConnectAPI: POST /api/gong/connect<br/>X-Gong-Auth: Basic b64<br/>{baseUrl?}
 
-    ConnectRoute->>ConnectRoute: makeGongFetch(baseUrl, authHeader)
-
-    par Fetch users (paginated)
-        ConnectRoute->>GongAPI: GET /v2/users
-        GongAPI-->>ConnectRoute: { users[], records.cursor }
-        loop More pages
-            ConnectRoute->>GongAPI: GET /v2/users?cursor=cursor
-            Note over ConnectRoute,GongAPI: sleep(GONG_RATE_LIMIT_MS = 350ms) between pages
-        end
-    and Fetch trackers (paginated)
-        ConnectRoute->>GongAPI: GET /v2/settings/trackers
-        GongAPI-->>ConnectRoute: { trackers[] }
-    and Fetch workspaces
-        ConnectRoute->>GongAPI: GET /v2/workspaces
-        GongAPI-->>ConnectRoute: { workspaces[] }
+    par fetch users (paginated)
+        ConnectAPI->>GongAPI: GET /v2/users
+        GongAPI-->>ConnectAPI: {users[], records.cursor}
+        Note over ConnectAPI: loop fetchAllPages() until cursor empty<br/>sleep(GONG_RATE_LIMIT_MS=350ms) between pages
+    and fetch trackers (paginated)
+        ConnectAPI->>GongAPI: GET /v2/settings/trackers
+        GongAPI-->>ConnectAPI: {trackers[], records.cursor}
+    and fetch workspaces
+        ConnectAPI->>GongAPI: GET /v2/workspaces
+        GongAPI-->>ConnectAPI: {workspaces[]}
     end
 
-    ConnectRoute->>ConnectRoute: Extract email @domains → internalDomains[]
-    ConnectRoute-->>ConnectPage: { users, trackers, workspaces, internalDomains, baseUrl }
+    Note over ConnectAPI: extract email domains from users[] → internalDomains[]
+    ConnectAPI-->>HomePage: {users, trackers, workspaces, internalDomains, baseUrl, warnings?}
 
-    ConnectPage->>ConnectPage: sessionStorage.setItem('gongwizard_session',<br/>JSON.stringify({ authHeader, users, trackers,<br/>workspaces, internalDomains, baseUrl }))
-    ConnectPage->>ConnectPage: router.push('/calls')
+    Note over HomePage: saveSession() → sessionStorage.gongwizard_session<br/>{authHeader, users, trackers, workspaces, internalDomains, baseUrl}
+    HomePage->>HomePage: router.push('/calls')
 ```
 
-### Step-by-step
+**Step-by-step:**
 
-1. **`src/app/page.tsx` — `handleConnect()`** — Constructs a Basic Auth header via `btoa(key + ':' + secret)`. POSTs to `/api/gong/connect` with the header in `X-Gong-Auth` and an optional custom `baseUrl` in the body.
-2. **`src/app/api/gong/connect/route.ts` — `POST()`** — Calls `makeGongFetch()` from `src/lib/gong-api.ts` to create a bound fetcher. Fires three Gong API calls concurrently via `Promise.allSettled()`:
-   - `fetchAllPages('/v2/users', 'users')` — paginates with cursor; sleeps `GONG_RATE_LIMIT_MS` (350 ms) between pages.
-   - `fetchAllPages('/v2/settings/trackers', 'trackers')` — same pagination pattern.
-   - `gongFetch('/v2/workspaces')` — single non-paginated request.
-3. **Domain extraction** — Iterates over all user `emailAddress` values, splits on `@`, builds a `Set<string>` of lowercase domains → `internalDomains[]`. Later consumed by `isInternalParty()` in `src/lib/format-utils.ts` to classify call participants as internal or external.
-4. **`src/app/page.tsx`** — Merges the response into a `GongSession` object (typed in `src/types/gong.ts`) and persists it to `sessionStorage` under key `gongwizard_session`. Navigates to `/calls`.
+1. `src/app/page.tsx` collects `accessKey` and `secretKey` from the form. It builds `authHeader = 'Basic ' + btoa(accessKey + ':' + secretKey)`.
+2. It POSTs to `/api/gong/connect` with `X-Gong-Auth: <authHeader>` and an optional `{baseUrl}` body.
+3. `src/app/api/gong/connect/route.ts` `POST()` reads the header and calls `makeGongFetch(baseUrl, authHeader)` from `src/lib/gong-api.ts` to produce a typed fetch wrapper that injects Basic auth on every Gong request.
+4. `fetchAllPages()` (defined inline in the route) paginates any Gong endpoint by following `records.cursor`, sleeping `GONG_RATE_LIMIT_MS` (350 ms) between pages via `sleep()` from `src/lib/gong-api.ts`.
+5. Three fetches run in parallel via `Promise.allSettled`: `/v2/users`, `/v2/settings/trackers`, `/v2/workspaces`. Partial failures produce `warnings[]` rather than hard errors.
+6. Internal email domains are derived: for each user's `emailAddress`, the domain after `@` is added to a `Set<string>` to produce `internalDomains[]`.
+7. The route returns `{users, trackers, workspaces, internalDomains, baseUrl}`.
+8. Back on the home page, `saveSession()` from `src/lib/session.ts` JSON-serialises the full object into `sessionStorage` under key `gongwizard_session`. The session clears when the tab closes (sessionStorage semantics). The user is navigated to `/calls`.
 
 ---
 
-## Flow 3: Call List Fetch & Filtering
+## 3. Call List Fetch
 
-**What it does:** Loads call metadata from Gong (paginated call list + batched extensive metadata), normalizes timestamps into milliseconds, and runs the resulting `GongCall[]` through client-side filter predicates in real time as the user adjusts filters.
+**What it does:** `/calls` page on mount reads the session, then calls `/api/gong/calls` which paginates the Gong call list and batch-fetches extensive metadata (parties, topics, trackers, brief, outline, CRM context) in batches of 10. The fully-enriched call array is returned and stored in React state on the client for filtering and selection.
 
-**Triggered by:** Page load of `src/app/calls/page.tsx`, after session is read from `sessionStorage`.
+**Triggered by:** `src/app/calls/page.tsx` mounting after a successful connect.
 
 ```mermaid
 sequenceDiagram
     participant CallsPage as src/app/calls/page.tsx
-    participant CallsRoute as src/app/api/gong/calls/route.ts (POST)
+    participant CallsAPI as src/app/api/gong/calls/route.ts
     participant GongAPI as api.gong.io
 
-    CallsPage->>CallsPage: Read sessionStorage('gongwizard_session')<br/>→ { authHeader, internalDomains, baseUrl, ... }
-    CallsPage->>CallsRoute: POST /api/gong/calls<br/>Header: X-Gong-Auth<br/>Body: { fromDate, toDate, workspaceId, baseUrl }
+    CallsPage->>CallsPage: getSession() from sessionStorage
+    Note over CallsPage: extract authHeader, baseUrl, internalDomains, users
 
-    loop Paginate /v2/calls
-        CallsRoute->>GongAPI: GET /v2/calls?fromDateTime=...&toDateTime=...
-        GongAPI-->>CallsRoute: { calls[{ id }], records.cursor }
-        Note over CallsRoute,GongAPI: sleep(350ms) between pages
+    CallsPage->>CallsAPI: POST /api/gong/calls<br/>X-Gong-Auth: Basic b64<br/>{fromDate, toDate, workspaceId?, baseUrl}
+
+    loop paginate /v2/calls
+        CallsAPI->>GongAPI: GET /v2/calls?fromDateTime=...&cursor=...
+        GongAPI-->>CallsAPI: {calls[{id,...}], records.cursor}
+        Note over CallsAPI: sleep(350ms) between pages
     end
 
-    CallsRoute->>CallsRoute: Collect all call IDs
+    Note over CallsAPI: collect all call IDs
 
-    loop Batch extensive metadata (EXTENSIVE_BATCH_SIZE = 10 IDs per batch)
-        CallsRoute->>GongAPI: POST /v2/calls/extensive { filter: { callIds: [...10] } }
-        GongAPI-->>CallsRoute: { calls[{ parties, topics, trackers, brief, outline, interactionStats, ... }] }
-        Note over CallsRoute,GongAPI: sleep(350ms) between batches
+    loop batch extensive metadata (10 IDs per batch)
+        CallsAPI->>GongAPI: POST /v2/calls/extensive {filter:{callIds:[...10]}}
+        GongAPI-->>CallsAPI: {calls[{parties,topics,trackers,brief,outline,...}]}
+        Note over CallsAPI: normalizeOutline() converts startTime/duration seconds → ms<br/>sleep(350ms) between batches
     end
 
-    CallsRoute->>CallsRoute: Normalize:<br/>- tracker startTime × 1000 → startTimeMs<br/>- outline startTime/duration × 1000 → ms<br/>- derive talkRatio from interactionStats<br/>- derive externalSpeakerCount from parties
-    CallsRoute-->>CallsPage: { calls: GongCall[] }
+    Note over CallsAPI: fallback: if 403 on /extensive, use basic call data
+    CallsAPI-->>CallsPage: {calls: GongCall[]}
 
-    CallsPage->>CallsPage: setCalls(data.calls)
-
-    loop User adjusts filters (real-time, client-side — src/lib/filters.ts)
-        CallsPage->>CallsPage: matchesTextSearch(call, searchText)
-        CallsPage->>CallsPage: matchesTrackers(call, activeTrackers)
-        CallsPage->>CallsPage: matchesTopics(call, activeTopics)
-        CallsPage->>CallsPage: matchesDurationRange(call, min, max)
-        CallsPage->>CallsPage: matchesTalkRatioRange(call, min, max)
-        CallsPage->>CallsPage: matchesParticipantName(call, participantSearch)
-        CallsPage->>CallsPage: matchesAiContentSearch(call, aiContentSearch)
-        CallsPage->>CallsPage: matchesMinExternalSpeakers(call, min)
-        CallsPage->>CallsPage: → filteredCalls[]
-    end
-
-    Note over CallsPage: useFilterState() persists range/toggle filters<br/>to localStorage('gongwizard_filters')
+    Note over CallsPage: derive externalSpeakerCount per call<br/>via isInternalParty() + internalDomains<br/>store in React state setCalls()
 ```
 
-### Step-by-step
+**Step-by-step:**
 
-1. **`src/app/calls/page.tsx`** — On mount, reads `gongwizard_session` from `sessionStorage`. POSTs to `/api/gong/calls` with date range, optional workspace filter, and `baseUrl`.
-2. **`src/app/api/gong/calls/route.ts` — `POST()`** — Paginates `GET /v2/calls` with a cursor loop, collecting all call IDs. Then batches IDs at `EXTENSIVE_BATCH_SIZE` (10) per batch into `POST /v2/calls/extensive` requests, sleeping 350 ms between each batch. If `/v2/calls/extensive` returns 403 (scope issue), falls back to basic call data.
-3. **Normalization** — Tracker `startTime` and outline `startTime`/`duration` values from Gong (in seconds) are multiplied by 1000 to produce millisecond values stored on `GongCall` (`src/types/gong.ts`). `externalSpeakerCount` is derived by counting parties where `isInternalParty()` returns false.
-4. **Client-side filtering** — `src/hooks/useFilterState.ts` manages all filter state, persisting range/toggle values to `localStorage('gongwizard_filters')`. The calls page derives `filteredCalls` by running the loaded call list through the pure predicates in `src/lib/filters.ts`: `matchesTextSearch`, `matchesTrackers`, `matchesTopics`, `matchesDurationRange`, `matchesTalkRatioRange`, `matchesParticipantName`, `matchesMinExternalSpeakers`, `matchesAiContentSearch`.
+1. `src/app/calls/page.tsx` calls `getSession()` from `src/lib/session.ts` on mount to read back the session stored in step 2.
+2. It POSTs to `/api/gong/calls` with the date range, optional `workspaceId`, and `baseUrl` from the session.
+3. `src/app/api/gong/calls/route.ts` uses `makeGongFetch` then paginates `GET /v2/calls` (with `fromDateTime`, `toDateTime`, optional `workspaceId`) until `records.cursor` is absent. Rate limit sleep of `GONG_RATE_LIMIT_MS` (350 ms) between pages.
+4. All collected call IDs are chunked into batches of `CALLS_BATCH_SIZE` (10). Each batch is sent to `POST /v2/calls/extensive`. If Gong returns 403 on the first extensive batch (scope not granted), the route falls back to the basic call data already fetched.
+5. `normalizeOutline()` in the route converts Gong's `startTime`/`duration` values (seconds) to milliseconds in `startTimeMs`/`durationMs` fields to align with the transcript timestamps.
+6. The route returns `{calls: GongCall[]}` with the full `src/types/gong.ts` shape.
+7. Back on `calls/page.tsx`, speaker counts are derived client-side using `isInternalParty()` from `src/lib/format-utils.ts` against `internalDomains`. Results are stored via `setCalls()` and filtered by `useFilterState()` from `src/hooks/useFilterState.ts`.
 
 ---
 
-## Flow 4: Transcript Export Pipeline
+## 4. Transcript Fetch and Export
 
-**What it does:** Fetches raw transcript monologues for selected calls, builds speaker-labelled turn groups, applies optional filler removal and monologue condensing, then renders the output in the user's chosen format (Markdown, XML, JSONL, or CSV) and delivers it as a file download, clipboard copy, or ZIP archive.
+**What it does:** When the user selects calls and clicks Export, Copy, or Export ZIP, `useCallExport` fetches transcripts from `/api/gong/transcripts`, assembles speaker maps from session data, groups sentences into per-turn blocks, and passes the result to the appropriate export builder which produces a file (Markdown, XML, JSONL, CSV, or Utterance CSV) that is downloaded or copied to clipboard.
 
-**Triggered by:** User clicking Export, Copy, or ZIP in `src/app/calls/page.tsx` after selecting calls.
+**Triggered by:** User clicking Export / Copy / Export ZIP in `src/app/calls/page.tsx`.
 
 ```mermaid
 sequenceDiagram
-    actor User
+    participant User
     participant CallsPage as src/app/calls/page.tsx
-    participant ExportHook as src/hooks/useCallExport.ts
-    participant TranscriptRoute as src/app/api/gong/transcripts/route.ts (POST)
+    participant useCallExport as src/hooks/useCallExport.ts
+    participant TranscriptAPI as src/app/api/gong/transcripts/route.ts
     participant GongAPI as api.gong.io
     participant Formatter as src/lib/transcript-formatter.ts
     participant Browser
 
-    User->>CallsPage: Click Export / Copy / ZIP
-    CallsPage->>ExportHook: handleExport() / handleCopy() / handleZipExport()
-    ExportHook->>ExportHook: fetchTranscriptsForSelected()
+    User->>CallsPage: click Export / Copy / ZIP
+    CallsPage->>useCallExport: handleExport() / handleCopy() / handleZipExport()
+    useCallExport->>useCallExport: fetchTranscriptsForSelected()
 
-    ExportHook->>TranscriptRoute: POST /api/gong/transcripts<br/>Header: X-Gong-Auth<br/>Body: { callIds[], baseUrl }
+    useCallExport->>TranscriptAPI: POST /api/gong/transcripts<br/>X-Gong-Auth: Basic b64<br/>{callIds[], baseUrl}
 
-    loop Batches of 50 call IDs (TRANSCRIPT_BATCH_SIZE)
-        TranscriptRoute->>GongAPI: POST /v2/calls/transcript { filter: { callIds: [...50] } }
-        GongAPI-->>TranscriptRoute: { callTranscripts[{ callId, transcript[monologues] }] }
-        Note over TranscriptRoute,GongAPI: sleep(350ms) between batches
+    loop batches of 50 callIds (TRANSCRIPT_BATCH_SIZE)
+        TranscriptAPI->>GongAPI: POST /v2/calls/transcript {filter:{callIds:[...50]}}
+        GongAPI-->>TranscriptAPI: {callTranscripts[{callId, transcript[monologues]}]}
+        Note over TranscriptAPI: paginate inner cursor if present<br/>sleep(350ms) between batches
     end
 
-    TranscriptRoute-->>ExportHook: { transcripts[{ callId, transcript }] }
+    TranscriptAPI-->>useCallExport: {transcripts[{callId, transcript[]}]}
 
-    ExportHook->>ExportHook: For each call:<br/>1. Build speakerMap from parties + isInternalParty() (format-utils.ts)<br/>2. Flatten monologue sentences → TranscriptSentence[]<br/>3. Sort by sentence.start timestamp<br/>4. groupTranscriptTurns() → FormattedTurn[] (transcript-formatter.ts)
+    Note over useCallExport: for each callId:<br/>  build speakerMap from session.users + parties<br/>  isInternalParty() per speaker → internal flag<br/>  flatten monologues → sentences[], sort by .start<br/>  groupTranscriptTurns() → FormattedTurn[]
 
-    ExportHook->>Formatter: buildExportContent(callsForExport, format, exportOpts, calls)
+    useCallExport->>Formatter: buildExportContent(calls, format, opts)
 
-    alt exportOpts.removeFillerGreetings
-        Formatter->>Formatter: filterFillerTurns(turns)
-    end
-    alt exportOpts.condenseMonologues
-        Formatter->>Formatter: condenseInternalMonologues(turns)
-    end
-
-    alt format = 'markdown'
-        Formatter-->>ExportHook: Markdown string
-    else format = 'xml'
-        Formatter-->>ExportHook: XML string
-    else format = 'jsonl'
-        Formatter-->>ExportHook: JSONL string
-    else format = 'csv'
-        Formatter-->>ExportHook: CSV string
+    alt markdown
+        Formatter->>Formatter: buildMarkdown() → buildCallText() per call<br/>truncateLongInternalTurns() if condenseMonologues
+    else xml
+        Formatter->>Formatter: buildXML() → escapeXml() per turn
+    else jsonl
+        Formatter->>Formatter: buildJSONL() → one JSON line per call
+    else csv
+        Formatter->>Formatter: buildCSVSummary() → metadata rows
+    else utterance-csv
+        Formatter->>Formatter: buildUtteranceCSV()<br/>buildUtterances() + alignTrackersToUtterances()<br/>findNearestOutlineItem() per utterance<br/>external utterances only
     end
 
-    alt handleExport
-        ExportHook->>Browser: downloadFile() — Blob + anchor click (format-utils.ts)
-    else handleCopy
-        ExportHook->>Browser: navigator.clipboard.writeText(content)
-    else handleZipExport
-        ExportHook->>ExportHook: Per-call buildExportContent() + manifest.json
-        ExportHook->>Browser: downloadZip() → Blob → anchor click (client-zip)
+    Formatter-->>useCallExport: {content, extension, mimeType}
+
+    alt download
+        useCallExport->>Browser: downloadFile() → Blob URL → a.click()
+    else copy
+        useCallExport->>Browser: navigator.clipboard.writeText()
+    else zip
+        useCallExport->>Browser: downloadZip(files) → Blob URL → a.click()
     end
 ```
 
-### Step-by-step
+**Step-by-step:**
 
-1. **`src/app/calls/page.tsx`** — User selects calls and clicks an export action. Delegates to `useCallExport` in `src/hooks/useCallExport.ts`, which receives `selectedIds`, `session`, `calls`, `exportFormat`, and `exportOpts`.
-2. **`fetchTranscriptsForSelected()` in `src/hooks/useCallExport.ts`** — POSTs selected call IDs to `/api/gong/transcripts` with `X-Gong-Auth` forwarded from `session.authHeader`.
-3. **`src/app/api/gong/transcripts/route.ts` — `POST()`** — Chunks call IDs into batches of `TRANSCRIPT_BATCH_SIZE` (50). For each batch, POSTs to `POST /v2/calls/transcript`. Handles cursor pagination within each batch. Accumulates `transcriptMap: Record<callId, monologue[]>`. Returns `{ transcripts: [{ callId, transcript }] }`.
-4. **Turn building in `src/hooks/useCallExport.ts`** — For each call, constructs a `speakerMap` using `isInternalParty()` from `src/lib/format-utils.ts` and `session.internalDomains`. Flattens monologue sentences to `TranscriptSentence[]`, sorts by `start` time, then calls `groupTranscriptTurns()` from `src/lib/transcript-formatter.ts` to produce speaker-labelled `FormattedTurn[]`.
-5. **`buildExportContent()` in `src/lib/transcript-formatter.ts`** — Applies optional `filterFillerTurns()` (removes short/filler turns) and `condenseInternalMonologues()` (merges consecutive same-speaker internal turns). Renders the chosen format. Token count is estimated via `estimateTokens()` from `src/lib/token-utils.ts` and shown in the UI.
-6. **Delivery** — `downloadFile()` from `src/lib/format-utils.ts` for single-file export; `navigator.clipboard.writeText()` for copy; `downloadZip()` (client-zip library) for ZIP with per-call files and a `manifest.json`.
+1. The user selects calls on `src/app/calls/page.tsx` (tracked in `selectedIds: Set<string>` state). Clicking export invokes one of `handleExport`, `handleCopy`, or `handleZipExport` on the `useCallExport` hook from `src/hooks/useCallExport.ts`.
+2. All three handlers call `fetchTranscriptsForSelected()`. This POSTs to `/api/gong/transcripts` with the selected IDs and `X-Gong-Auth` from session.
+3. `src/app/api/gong/transcripts/route.ts` `POST()` chunks IDs into batches of `TRANSCRIPT_BATCH_SIZE` (50). Each batch calls `POST /v2/calls/transcript` with `{filter:{callIds:[...]}}`. An inner cursor loop handles pagination within each batch. A `sleep(GONG_RATE_LIMIT_MS)` separates batches.
+4. Transcripts are accumulated in `transcriptMap: Record<string, monologue[]>` keyed by `callId`. The route returns `{transcripts: [{callId, transcript}]}`.
+5. Back in `fetchTranscriptsForSelected()`, each transcript is matched to its call metadata from the `calls` prop. A `speakerMap` is built from `callMeta.parties` using `isInternalParty()` from `src/lib/format-utils.ts` against `session.internalDomains`.
+6. Monologue sentences are flattened into a flat `TranscriptSentence[]` and sorted by `start` (milliseconds). `groupTranscriptTurns()` from `src/lib/transcript-formatter.ts` groups consecutive same-speaker sentences into `FormattedTurn[]` objects with timestamp, firstName, and isInternal.
+7. `buildExportContent()` routes to the appropriate builder:
+   - `buildMarkdown()` / `buildXML()` / `buildJSONL()`: all use `truncateLongInternalTurns()` when `condenseMonologues` is enabled, which applies `truncateIfLong()` to internal turns >= 150 words (first 2 + last 2 sentences with `[...]`).
+   - `buildCSVSummary()`: one row per call, metadata only (topics, trackers, talk ratio, key points, action items, Gong URL).
+   - `buildUtteranceCSV()`: external speaker utterances only. Calls `buildUtterances()` and `alignTrackersToUtterances()` from `src/lib/tracker-alignment.ts`, then `findNearestOutlineItem()` from `src/lib/transcript-surgery.ts` for the `Outline Section` column. Includes `PRIMARY_ANALYSIS_TEXT` and `REFERENCE_ONLY_CONTEXT` columns.
+8. `downloadFile()` from `src/lib/browser-utils.ts` creates a Blob URL and triggers a synthetic `<a>` click. For ZIP, `downloadZip()` from `client-zip` assembles per-call files plus a `manifest.json` into a ZIP blob.
 
 ---
 
-## Flow 5: AI Research Analysis Pipeline
+## 5. AI Research Pipeline (Analyze Panel)
 
-**What it does:** A five-stage pipeline that scores call relevance with a cheap model, surgically extracts relevant transcript segments, truncates long internal monologues, runs per-call finding extraction with a smart model, then synthesizes cross-call themes. Supports iterative follow-up questions against the cached processed data.
+**What it does:** The `AnalyzePanel` component orchestrates a multi-stage AI pipeline: (1) score calls for relevance using call metadata, (2) fetch transcripts for high-scoring calls, (3) perform surgical extraction of relevant utterances, (4) optionally use AI to truncate long internal monologues, (5) run per-call or batch AI analysis to extract verbatim external-speaker findings, (6) synthesize findings across all calls into a direct answer with attributed quotes. A follow-up question loop is available post-synthesis.
 
-**Triggered by:** User entering a research question and clicking "Score Calls" then "Analyze" in `src/components/analyze-panel.tsx`.
+**Triggered by:** User entering a research question and clicking Analyze in `src/components/analyze-panel.tsx`.
 
 ```mermaid
 sequenceDiagram
-    actor User
-    participant Panel as src/components/analyze-panel.tsx (AnalyzePanel)
-    participant ScoreRoute as src/app/api/analyze/score/route.ts
-    participant TranscriptRoute as src/app/api/gong/transcripts/route.ts
-    participant ProcessRoute as src/app/api/analyze/process/route.ts
-    participant RunRoute as src/app/api/analyze/run/route.ts
-    participant SynthRoute as src/app/api/analyze/synthesize/route.ts
-    participant FollowupRoute as src/app/api/analyze/followup/route.ts
-    participant GeminiFlashLite as Gemini 2.0 Flash-Lite (cheapCompleteJSON)
-    participant GPT4o as GPT-4o (smartCompleteJSON)
+    participant User
+    participant AnalyzePanel as src/components/analyze-panel.tsx
+    participant ScoreAPI as src/app/api/analyze/score/route.ts
+    participant TranscriptAPI as src/app/api/gong/transcripts/route.ts
+    participant ProcessAPI as src/app/api/analyze/process/route.ts
+    participant BatchRunAPI as src/app/api/analyze/batch-run/route.ts
+    participant RunAPI as src/app/api/analyze/run/route.ts
+    participant SynthesizeAPI as src/app/api/analyze/synthesize/route.ts
+    participant FollowupAPI as src/app/api/analyze/followup/route.ts
+    participant Gemini as Google Gemini API
 
-    User->>Panel: Enter research question → handleScore()
+    User->>AnalyzePanel: enter question, click Analyze
 
-    Panel->>ScoreRoute: POST /api/analyze/score<br/>{ question, calls[{ id, title, brief, keyPoints,<br/>outline, trackers, topics, talkRatio }] }
-    ScoreRoute->>GeminiFlashLite: cheapCompleteJSON() — one prompt per call (all parallel)
-    GeminiFlashLite-->>ScoreRoute: { score: 0-10, reason, relevant_sections[] }
-    ScoreRoute-->>Panel: { scores[{ callId, score, reason, relevantSections }] }
+    AnalyzePanel->>ScoreAPI: POST /api/analyze/score<br/>{question, calls[{id,brief,keyPoints,trackers,outline}]}
+    ScoreAPI->>Gemini: cheapCompleteJSON() gemini-3.1-flash-lite-preview<br/>score each call 0-10 for relevance
+    Gemini-->>ScoreAPI: {scores[{callId, score, reason, relevant_sections}]}
+    ScoreAPI-->>AnalyzePanel: scored calls
 
-    Panel->>Panel: setScoredCalls() sorted by score desc<br/>Auto-select calls with score >= 3
+    Note over AnalyzePanel: filter score >= threshold, sort descending
 
-    User->>Panel: Review scores, adjust selection → handleAnalyze()
+    AnalyzePanel->>TranscriptAPI: POST /api/gong/transcripts {callIds: high-scoring IDs}
+    TranscriptAPI-->>AnalyzePanel: {transcripts[]}
 
-    Panel->>TranscriptRoute: POST /api/gong/transcripts { callIds, baseUrl }
-    TranscriptRoute-->>Panel: { transcripts[{ callId, transcript[] }] }
+    Note over AnalyzePanel: buildUtterances() + alignTrackersToUtterances()<br/>performSurgery() → SurgeryResult per call<br/>filter to relevant section windows + tracker hits<br/>longInternalMonologues flagged for truncation
 
-    loop For each selected call (sequential)
-        Panel->>Panel: buildUtterances(monologues, speakerClassifier)<br/>— src/lib/tracker-alignment.ts
-        Panel->>Panel: extractTrackerOccurrences(call.trackers)<br/>— src/lib/tracker-alignment.ts
-        Panel->>Panel: alignTrackersToUtterances(utterances, trackerOccs)<br/>— src/lib/tracker-alignment.ts
-        Panel->>Panel: performSurgery(callId, utterances, outline,<br/>relevantSections, durationMs)<br/>— src/lib/transcript-surgery.ts
-
-        alt surgery.longInternalMonologues.length > 0
-            Panel->>ProcessRoute: POST /api/analyze/process<br/>{ question, monologues[{ index, text }] }
-            ProcessRoute->>GeminiFlashLite: cheapCompleteJSON(buildSmartTruncationPrompt())
-            GeminiFlashLite-->>ProcessRoute: [{ index, kept }]
-            ProcessRoute-->>Panel: { truncated[{ index, kept }] }
-            Panel->>Panel: Patch surgery.excerpts[index].text = kept
-        end
-
-        Panel->>Panel: formatExcerptsForAnalysis(excerpts, callTitle,<br/>date, account, talkRatioPct, trackerNames,<br/>sectionsUsed, keyPoints)<br/>— src/lib/transcript-surgery.ts
-        Panel->>Panel: estimateInputTokens(callDataStr)<br/>Check vs TOKEN_BUDGET (250,000)
-
-        Panel->>RunRoute: POST /api/analyze/run { question, callData: callDataStr }
-        RunRoute->>GPT4o: smartCompleteJSON() — finding extraction prompt
-        GPT4o-->>RunRoute: { findings[{ exact_quote, timestamp,<br/>context, significance, finding_type }] }
-        RunRoute-->>Panel: { findings[] }
-        Panel->>Panel: allCallFindings.push({ callId, callTitle, account, findings })
+    opt long internal monologues exist
+        AnalyzePanel->>ProcessAPI: POST /api/analyze/process<br/>{question, monologues[{index, text}]}
+        ProcessAPI->>Gemini: cheapCompleteJSON() buildSmartTruncationPrompt()
+        Gemini-->>ProcessAPI: [{index, kept}]
+        ProcessAPI-->>AnalyzePanel: {truncated[]}
+        Note over AnalyzePanel: patch excerpts[index].text = kept
     end
 
-    Panel->>Panel: setProcessedDataCache(allProcessedData.join('---'))
+    Note over AnalyzePanel: formatExcerptsForAnalysis() → callData string per call
 
-    Panel->>SynthRoute: POST /api/analyze/synthesize<br/>{ question, allFindings[] }
-    SynthRoute->>GPT4o: smartCompleteJSON() — cross-call theme synthesis
-    GPT4o-->>SynthRoute: { themes[{ theme, frequency,<br/>representative_quotes, call_ids }], overall_summary }
-    SynthRoute-->>Panel: { themes, overall_summary }
-    Panel->>Panel: setStage('results')
+    alt batch mode
+        AnalyzePanel->>BatchRunAPI: POST /api/analyze/batch-run<br/>{question, calls[{callId,callData,brief,speakerDirectory,callMeta}]}
+        BatchRunAPI->>Gemini: smartCompleteJSON() gemini-2.5-pro<br/>extract findings from external speakers across all calls
+        Gemini-->>BatchRunAPI: {results:{callId:{findings[]}}}
+        BatchRunAPI-->>AnalyzePanel: findings per callId
+    else per-call mode
+        loop each call
+            AnalyzePanel->>RunAPI: POST /api/analyze/run {question, callData, speakerDirectory, callMeta}
+            RunAPI->>Gemini: smartCompleteJSON() gemini-2.5-pro
+            Gemini-->>RunAPI: {findings[]}
+            RunAPI-->>AnalyzePanel: findings for call
+        end
+    end
 
-    opt User submits follow-up question (up to 10)
-        User->>Panel: Type follow-up → handleFollowUp()
-        Panel->>FollowupRoute: POST /api/analyze/followup<br/>{ question, followUpQuestion,<br/>processedData (cached), previousFindings }
-        FollowupRoute->>GPT4o: smartCompleteJSON() — follow-up answer prompt
-        GPT4o-->>FollowupRoute: { answer, supporting_quotes[], calls_referenced[] }
-        FollowupRoute-->>Panel: { answer, supporting_quotes }
-        Panel->>Panel: setFollowUps([...prev, { question, answer, supporting_quotes }])
+    AnalyzePanel->>SynthesizeAPI: POST /api/analyze/synthesize<br/>{question, allFindings[{callId,callTitle,callDate,account,findings[]}]}
+    SynthesizeAPI->>Gemini: smartCompleteJSON() gemini-2.5-pro<br/>synthesize answer + top supporting quotes
+    Gemini-->>SynthesizeAPI: {answer, quotes[{quote,speaker_name,job_title,company,call_title,call_date}]}
+    SynthesizeAPI-->>AnalyzePanel: synthesis result
+    AnalyzePanel-->>User: display answer + attributed quotes
+
+    opt follow-up question
+        User->>AnalyzePanel: type follow-up question
+        AnalyzePanel->>FollowupAPI: POST /api/analyze/followup<br/>{question, followUpQuestion, processedData, previousFindings}
+        FollowupAPI->>Gemini: smartCompleteJSON() gemini-2.5-pro
+        Gemini-->>FollowupAPI: {answer, quotes[]}
+        FollowupAPI-->>AnalyzePanel: follow-up answer + quotes
     end
 ```
 
-### Step-by-step
+**Step-by-step:**
 
-**Stage 1 — Scoring (`handleScore`)**
+1. `src/components/analyze-panel.tsx` collects a research question. On submit it sends all loaded call metadata (brief, keyPoints, trackers, outline) to `POST /api/analyze/score`.
+2. `src/app/api/analyze/score/route.ts` calls `cheapCompleteJSON()` from `src/lib/ai-providers.ts` (Gemini Flash-Lite `gemini-3.1-flash-lite-preview`, temp 0.2) with a prompt asking for a 0-10 relevance score plus `relevant_sections` names per call. Falls back to neutral score 5 on parse error.
+3. The panel filters calls above a score threshold and requests their transcripts from `/api/gong/transcripts` (same flow as section 4, steps 2-4).
+4. Client-side: `buildUtterances()` and `alignTrackersToUtterances()` from `src/lib/tracker-alignment.ts` produce `Utterance[]` with tracker labels attached. `performSurgery()` from `src/lib/transcript-surgery.ts` filters utterances to those inside `relevant_sections` time windows (via `buildChapterWindows()`) or carrying tracker hits. Filler patterns, greeting/closing zone utterances (first/last 60s), and turns under 8 words are dropped. Long internal monologues (> 60 words) are flagged in `SurgeryResult.longInternalMonologues`.
+5. If long internal monologues exist, they are batched into a single `POST /api/analyze/process` call. `src/app/api/analyze/process/route.ts` builds a prompt via `buildSmartTruncationPrompt()` from `src/lib/transcript-surgery.ts` and calls `cheapCompleteJSON()`. Returned `{index, kept}` pairs patch the excerpt text back into the `SurgeryResult`.
+6. `formatExcerptsForAnalysis()` from `src/lib/transcript-surgery.ts` renders each call's excerpts into a structured text block with section headers, tracker labels, speaker names/titles, outline item context, and timestamps.
+7. Analysis runs in batch mode (all calls in one prompt) via `POST /api/analyze/batch-run`, or per-call via `POST /api/analyze/run` for large transcript sets. Both routes call `smartCompleteJSON()` (Gemini 2.5 Pro `gemini-2.5-pro`, temp 0.3, maxTokens 4096/16384) with a system prompt requiring verbatim external-speaker-only quotes with full attribution.
+8. All per-call findings are collected into `allFindings[]` and sent to `POST /api/analyze/synthesize`. `src/app/api/analyze/synthesize/route.ts` calls `smartCompleteJSON()` to produce a 2-4 sentence direct answer plus attributed supporting quotes. Only calls with `is_external` findings are included.
+9. If the user submits a follow-up question, it goes to `POST /api/analyze/followup` with the original `processedData` and `previousFindings` for context. The response is the same `{answer, quotes[]}` shape.
 
-1. **`src/components/analyze-panel.tsx` — `handleScore()`** — Sends all selected calls' metadata (title, brief, keyPoints, outline, trackers, topics, talkRatio) to `POST /api/analyze/score`.
-2. **`src/app/api/analyze/score/route.ts` — `POST()`** — Scores all calls in parallel using `cheapCompleteJSON()` from `src/lib/ai-providers.ts`, which calls Gemini 2.0 Flash-Lite (`gemini-2.0-flash-lite`). Returns a 0–10 relevance score, one-sentence reason, and the outline section names most likely to contain signal.
-3. Back in the panel: calls are sorted by score descending. Any call scoring ≥ 3 is pre-selected. User can deselect before proceeding to analysis.
+---
 
-**Stage 2 — Transcript Fetch**
+## 6. Transcript Keyword Search (Streaming)
 
-4. **`handleAnalyze()`** — Fetches transcripts for the selected calls via `POST /api/gong/transcripts` (same route as the export pipeline, batched at 50 IDs with 350 ms rate limiting).
+**What it does:** The transcript search feature lets the user search across hundreds of calls for a keyword by scanning raw transcript sentences. The `/api/gong/search` route fetches transcripts in batches of 50, scans each sentence for the keyword case-insensitively, and streams matches back as newline-delimited JSON (NDJSON). The client reads the stream incrementally, updating a progress indicator and match list in real time.
 
-**Stage 3 — Transcript Surgery (per call, sequential)**
+**Triggered by:** User entering a keyword and clicking Search on the calls page search tab.
 
-5. **`buildUtterances()`** in `src/lib/tracker-alignment.ts` — Converts raw Gong monologue objects into `Utterance[]` with `startTimeMs`/`endTimeMs`/`midTimeMs`, speaker classification via the `speakerClassifier` closure, and empty `trackers[]`.
-6. **`extractTrackerOccurrences()` + `alignTrackersToUtterances()`** in `src/lib/tracker-alignment.ts` — Aligns tracker firing timestamps to utterances using four-step logic: exact containment → ±3s (`WINDOW_MS`) fallback → speaker preference → closest by midpoint distance. Mutates `utterance.trackers[]` in place.
-7. **`performSurgery()`** in `src/lib/transcript-surgery.ts` — Filters out filler turns (via `isFiller()`), greeting/closing turns (first/last 60 s, under 15 words), and sub-8-word turns. Retains only utterances falling within relevant outline time windows (from `buildChapterWindows()`) or carrying tracker matches. Adds `contextBefore` for external-speaker utterances via `enrichContext()`. Flags internal monologues over 60 words as `needsSmartTruncation`.
+```mermaid
+sequenceDiagram
+    participant User
+    participant CallsPage as src/app/calls/page.tsx
+    participant SearchAPI as src/app/api/gong/search/route.ts
+    participant GongAPI as api.gong.io
 
-**Stage 4 — Smart Truncation (conditional)**
+    User->>CallsPage: enter keyword, click Search (up to 500 selected call IDs)
 
-8. If `surgery.longInternalMonologues` is non-empty, the panel POSTs them to `POST /api/analyze/process`. **`src/app/api/analyze/process/route.ts`** calls `buildSmartTruncationPrompt()` from `src/lib/transcript-surgery.ts` and passes it to `cheapCompleteJSON()` (Gemini Flash-Lite). The returned `kept` strings are patched back into `surgery.excerpts[index].text`, replacing the long originals.
+    CallsPage->>SearchAPI: POST /api/gong/search<br/>X-Gong-Auth: Basic b64<br/>{callIds[], keyword, baseUrl}
 
-**Stage 5 — Per-call Finding Extraction**
+    Note over SearchAPI: create ReadableStream, async start(controller)
 
-9. **`formatExcerptsForAnalysis()`** in `src/lib/transcript-surgery.ts` — Renders excerpts as a structured text block with call metadata header, `[REP CONTEXT]`/`[CUSTOMER]` labels, tracker annotations, and section names.
-10. **`POST /api/analyze/run`** — `src/app/api/analyze/run/route.ts` calls `smartCompleteJSON()` (GPT-4o, `gpt-4o`) with the formatted excerpt block. Returns structured findings: `exact_quote`, `timestamp`, `context`, `significance` (high/medium/low), `finding_type` (objection/need/competitive/question/feedback).
-11. Token usage is accumulated via `estimateInputTokens()` (chars / 4) and checked against `TOKEN_BUDGET` (250,000). If exceeded, analysis halts and an error is displayed.
+    loop batches of 50 IDs (TRANSCRIPT_BATCH_SIZE)
+        SearchAPI->>GongAPI: POST /v2/calls/transcript {filter:{callIds:[...50]}}
+        GongAPI-->>SearchAPI: {callTranscripts[{callId, transcript[monologues]}]}
 
-**Stage 6 — Synthesis**
+        loop each callTranscript → monologue → sentence
+            Note over SearchAPI: sentence.text.toLowerCase().includes(keyword)?
+            alt keyword match
+                SearchAPI-->>CallsPage: NDJSON: {type:"match", callId, speakerId,<br/>timestamp, text, context}
+            end
+        end
 
-12. **`POST /api/analyze/synthesize`** — `src/app/api/analyze/synthesize/route.ts` calls `smartCompleteJSON()` (GPT-4o) with all per-call findings combined. Returns cross-call `themes[]` with frequency counts and representative verbatim quotes, plus an `overall_summary`. The panel stores these and transitions to `stage = 'results'`.
+        SearchAPI-->>CallsPage: NDJSON: {type:"progress", searched, total, matchCount}
+        Note over SearchAPI: sleep(GONG_RATE_LIMIT_MS=350ms) between batches
+    end
 
-**Follow-up Questions**
+    SearchAPI-->>CallsPage: NDJSON: {type:"done", searched, matchCount}
+    Note over SearchAPI: controller.close()
 
-13. The full `processedDataCache` string (all `callDataStr` blocks joined with `---`) and `callFindings` are cached in component state after analysis completes. On each follow-up, **`POST /api/analyze/followup`** sends the cache plus the new question to `smartCompleteJSON()` (GPT-4o). Returns `{ answer, supporting_quotes[], calls_referenced[] }`. Up to 10 follow-ups are allowed per analysis session.
+    Note over CallsPage: ReadableStream reader splits on newlines<br/>JSON.parse() each line<br/>type=match → append to results<br/>type=progress → update progress bar<br/>type=done → mark complete
+```
+
+**Step-by-step:**
+
+1. The user enters a keyword on `src/app/calls/page.tsx`. The page sends up to 500 selected call IDs plus the keyword to `POST /api/gong/search` with the `X-Gong-Auth` session header.
+2. `src/app/api/gong/search/route.ts` `POST()` validates auth and inputs, caps IDs at 500, lowercases the keyword, and constructs a `ReadableStream` with an `async start(controller)` closure.
+3. The stream chunks IDs into groups of `TRANSCRIPT_BATCH_SIZE` (50) and calls `gongFetch('/v2/calls/transcript', ...)` (produced by `makeGongFetch()` from `src/lib/gong-api.ts`). Failed batches are caught and skipped with `console.error`.
+4. For each `callTranscript` in the response, it iterates monologues and sentences. When `sentence.text.toLowerCase().includes(lowerKeyword)` is true, it `emit()`s a `{type:"match", callId, speakerId, timestamp, text, context}` object. `timestamp` is formatted via `formatTimestamp()` from `src/lib/format-utils.ts` (converts milliseconds `sentence.start` to `M:SS`). `context` is the preceding sentence text (`sentences[j-1]?.text`).
+5. After each batch, a `{type:"progress", searched, total, matchCount}` line is emitted. `sleep(GONG_RATE_LIMIT_MS)` runs between batches to respect the Gong rate limit.
+6. When all batches are complete, `{type:"done", searched, matchCount}` is emitted and `controller.close()` ends the stream.
+7. The response is `Content-Type: application/x-ndjson`. The client reads it with a `ReadableStream` reader, accumulating a text buffer, splitting on `\n`, JSON-parsing each complete line, and routing to UI state updates based on the `type` field.

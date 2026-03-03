@@ -1,29 +1,20 @@
-# Configuration Reference
-
-GongWizard configuration reference — environment variables, build/runtime config, feature flags, constants, and third-party service integration.
+# GongWizard — Configuration Reference
 
 ---
 
 ## 1. Environment Variables
 
-GongWizard has three server-side environment variables. No `.env.example` or `.env.local.example` files exist in the repository; variables are referenced directly in code.
-
 | Name | Purpose | Required / Optional | Default Value | Where Used |
 |---|---|---|---|---|
-| `SITE_PASSWORD` | Password checked against user input on the gate page to issue the `gw-auth` session cookie | Required | — | `src/app/api/auth/route.ts` |
-| `OPENAI_API_KEY` | API key for OpenAI; used by the smart AI tier (`gpt-4o`) for call analysis, synthesis, and follow-up routes | Required (AI features) | — | `src/lib/ai-providers.ts` |
-| `GEMINI_API_KEY` | API key for Google Gemini; used by the cheap AI tier (`gemini-2.0-flash-lite`) for call scoring and transcript truncation | Required (AI features) | — | `src/lib/ai-providers.ts` |
+| `SITE_PASSWORD` | Password checked at `/api/auth` to issue the `gw-auth` session cookie | **Required** | — | `src/app/api/auth/route.ts` |
+| `GEMINI_API_KEY` | API key for Google Gemini (both Flash-Lite cheap tier and 2.5 Pro smart tier) | **Required** (for AI analysis features) | — | `src/lib/ai-providers.ts` |
 
-**Setup**: Create `.env.local` in the project root and set all three.
+**Notes:**
 
-### How Gong credentials are handled
+- No database is used. Gong API credentials are user-supplied at runtime via the Connect page, Base64-encoded into `authHeader`, and stored in browser `sessionStorage` under the key `gongwizard_session`. They are never persisted server-side and are not environment variables.
+- The `openai` package appears in `package.json` but no `OPENAI_API_KEY` reference exists in the current source files — it is unused at the time of this writing.
 
-Gong API credentials (Access Key + Secret Key) are **never stored in environment variables**. The flow is:
-
-1. User enters credentials on `src/app/page.tsx` (the Connect page).
-2. The browser Base64-encodes them into an `authHeader` string and stores the full `GongSession` object in `sessionStorage` under the key `gongwizard_session`.
-3. Every API proxy request reads the header from the client and passes it to Gong as `Authorization: Basic <authHeader>` via the `X-Gong-Auth` HTTP request header.
-4. On tab close, `sessionStorage` is cleared automatically; on explicit disconnect, `sessionStorage.removeItem('gongwizard_session')` is called in `src/app/calls/page.tsx`.
+**No `.env.example` file exists in the repository.** The only env vars scanned from code are `SITE_PASSWORD` (in `src/app/api/auth/route.ts`) and `GEMINI_API_KEY` (in `src/lib/ai-providers.ts`).
 
 ---
 
@@ -31,7 +22,7 @@ Gong API credentials (Access Key + Secret Key) are **never stored in environment
 
 ### `next.config.ts`
 
-Location: `next.config.ts`
+Location: `next.config.ts` (project root)
 
 ```typescript
 const nextConfig: NextConfig = {
@@ -39,257 +30,322 @@ const nextConfig: NextConfig = {
 };
 ```
 
-The `nextConfig` object is a bare scaffold with no custom options. Next.js 15 defaults apply — App Router, Turbopack for `npm run dev`, no custom rewrites/redirects/headers/images/output mode.
+The config object is empty — no custom Next.js settings are applied. Turbopack is enabled by default in Next.js 16 (used when running `next dev`).
+
+---
 
 ### `tsconfig.json`
 
-Location: `tsconfig.json`
+Location: `tsconfig.json` (project root)
 
 | Option | Value | Effect |
 |---|---|---|
-| `target` | `"ES2017"` | Compiles to ES2017 output (async/await native, no regenerator) |
-| `lib` | `["dom", "dom.iterable", "esnext"]` | Browser DOM types + latest ECMAScript types |
-| `strict` | `true` | All strict checks: `strictNullChecks`, `noImplicitAny`, etc. |
-| `noEmit` | `true` | Type-check only; Next.js handles emit via SWC/Turbopack |
-| `module` | `"esnext"` | ESM module syntax |
-| `moduleResolution` | `"bundler"` | Bundler-style resolution; no `.js` extension needed on imports |
-| `resolveJsonModule` | `true` | Allows importing `.json` files as typed modules |
-| `isolatedModules` | `true` | Each file must be independently transpilable; required for SWC |
-| `incremental` | `true` | Caches type-check state between builds |
-| `jsx` | `"react-jsx"` | Automatic JSX transform — no `import React` required per file |
-| `paths` | `{ "@/*": ["./src/*"] }` | `@/` resolves to `src/`; used for all internal imports |
-| `plugins` | `[{ "name": "next" }]` | Next.js TypeScript plugin for IDE support |
+| `target` | `"ES2017"` | Compiles down to ES2017 syntax |
+| `lib` | `["dom", "dom.iterable", "esnext"]` | Includes browser and latest ES APIs |
+| `strict` | `true` | Enables all strict type checks |
+| `noEmit` | `true` | Type-checks only — no output files (Next.js handles compilation) |
+| `module` | `"esnext"` | ESM module format |
+| `moduleResolution` | `"bundler"` | Resolves modules using bundler-style logic (required for Next.js 13+) |
+| `resolveJsonModule` | `true` | Allows importing `.json` files as modules |
+| `isolatedModules` | `true` | Each file must be a module (required for SWC/esbuild) |
+| `jsx` | `"react-jsx"` | Uses the React 17+ automatic JSX transform |
+| `incremental` | `true` | Enables incremental compilation cache |
+| `plugins` | `[{ "name": "next" }]` | Activates Next.js TypeScript plugin |
+| `paths` | `{ "@/*": ["./src/*"] }` | Maps `@/` imports to `src/` directory |
+
+---
 
 ### Tailwind CSS
 
-**Version:** `tailwindcss@^4`
+Tailwind v4 is used. There is no `tailwind.config.ts` file — Tailwind v4 uses CSS-based configuration only. Custom theme tokens (CSS custom properties) are defined in `src/app/globals.css` (not included in the repomix output but referenced by `src/app/layout.tsx`).
 
-No `tailwind.config.js` or `tailwind.config.ts` exists. Tailwind v4 is configured via CSS-first directives in `src/app/globals.css`. PostCSS integration is provided by `@tailwindcss/postcss@^4`. The only additional styling package is `tw-animate-css@^1.4.0`, which provides animation utilities (`animate-in`, `fade-in-0`, `zoom-in-95`, `slide-in-from-top-2`) used in shadcn/ui component transitions.
+The PostCSS integration is provided via the `@tailwindcss/postcss` dev dependency.
+
+---
 
 ### ESLint
 
-**Config:** `eslint-config-next` (standard Next.js ruleset). No custom `.eslintrc` or `eslint.config.*` is present. Run via `npm run lint`.
+ESLint v9 is configured with `eslint-config-next` (version 16.1.6). No custom rules file was included in the repomix output. Lint is run via:
 
-### Fonts
-
-Location: `src/app/layout.tsx`
-
-Both fonts are loaded via `next/font/google` and self-hosted at build time — no CDN requests at runtime.
-
-| Identifier | Font Family | CSS Variable | Subset |
-|---|---|---|---|
-| `geistSans` | `Geist` | `--font-geist-sans` | `latin` |
-| `geistMono` | `Geist_Mono` | `--font-geist-mono` | `latin` |
+```bash
+npm run lint  # runs: eslint
+```
 
 ---
 
 ## 3. Feature Flags / Constants
 
-All hardcoded values that control runtime behavior. None are env-var-togglable.
+### `src/lib/gong-api.ts`
 
-### Gong API — `src/lib/gong-api.ts`
-
-| Constant | Value | What It Controls |
-|---|---|---|
-| `GONG_RATE_LIMIT_MS` | `350` | Milliseconds to sleep between paginated requests and batch iterations. Keeps throughput under Gong's ~3 req/s limit. Imported by all three proxy routes. |
-| `EXTENSIVE_BATCH_SIZE` | `10` | Call IDs per request to `/v2/calls/extensive`. Matches Gong's API hard limit. Used in `src/app/api/gong/calls/route.ts`. |
-| `TRANSCRIPT_BATCH_SIZE` | `50` | Call IDs per request to `/v2/calls/transcript`. Matches Gong's API hard limit. Used in `src/app/api/gong/transcripts/route.ts`. |
-| `MAX_RETRIES` | `5` | Maximum retry attempts per Gong API request before throwing. Uses exponential backoff capped at 30 s. HTTP 429 respects `Retry-After` header. |
-
-### Default Gong API Base URL
-
-| Value | Files | What It Controls |
-|---|---|---|
-| `'https://api.gong.io'` | `src/app/api/gong/connect/route.ts`, `src/app/api/gong/calls/route.ts`, `src/app/api/gong/transcripts/route.ts` | Fallback base URL when the client does not supply a `baseUrl` in the POST body. Trailing slashes stripped via `.replace(/\/+$/, '')`. |
-
-### Auth Cookie — `src/app/api/auth/route.ts` + `src/middleware.ts`
-
-| Property | Value | What It Controls |
-|---|---|---|
-| Cookie name | `'gw-auth'` | Name of the httpOnly cookie set after successful site password entry |
-| Cookie value | `'1'` | Sentinel value checked by middleware (`auth?.value === '1'`) |
-| `maxAge` | `604800` s (7 days) | How long the auth cookie persists before requiring re-entry |
-| `sameSite` | `'lax'` | Allows top-level navigation from external sites, blocks CSRF |
-| `path` | `'/'` | Cookie applies to all routes |
-| `httpOnly` | `true` | Not accessible from JavaScript |
-
-### Middleware Route Matcher — `src/middleware.ts`
-
-| Property | Value | What It Controls |
-|---|---|---|
-| `config.matcher` | `['/((?!_next/static\|_next/image\|favicon.ico).*)']` | Paths where middleware runs. Static assets excluded at matcher level. Inside `middleware()`, these paths bypass the auth check: `/gate`, `/api/`, `/_next/`, `/favicon`. |
-
-### Session Storage Key
-
-Files: `src/app/page.tsx` (write), `src/app/calls/page.tsx` (read/write/clear)
-
-| Key | Storage Type | Contents |
-|---|---|---|
-| `gongwizard_session` | `sessionStorage` | `GongSession`: `{ authHeader, users, trackers, workspaces, internalDomains, baseUrl }` |
-
-### Filter State Storage Key — `src/hooks/useFilterState.ts`
-
-| Constant | Value | What It Controls |
-|---|---|---|
-| `STORAGE_KEY` | `'gongwizard_filters'` | `localStorage` key where filter state is persisted across page refreshes |
-| Default duration range | `[0, 7200]` | Slider range in seconds (0 – 2 hours) |
-| Default talk ratio range | `[0, 100]` | Slider range in percentage points |
-
-### AI Providers — `src/lib/ai-providers.ts`
-
-| Constant / Default | Value | What It Controls |
-|---|---|---|
-| `TOKEN_BUDGET` | `250_000` | Hard cap on estimated total input tokens per analysis session. Declared in `src/lib/ai-providers.ts` and inlined in `src/components/analyze-panel.tsx`. |
-| Cheap tier default `maxOutputTokens` | `1024` | Default output token limit for `cheapComplete` (Gemini) when caller omits `maxTokens` |
-| Smart tier default `max_tokens` | `4096` | Default output token limit for `smartComplete` and `smartStream` (GPT-4o) when caller omits `maxTokens` |
-| Default `temperature` (both tiers) | `0.3` | Applied when callers omit the `temperature` option |
-
-### AI Model IDs — `src/lib/ai-providers.ts`
-
-| Tier | Model ID | Function(s) | Purpose |
+| Name | Value | Type | What It Controls |
 |---|---|---|---|
-| Cheap | `'gemini-2.0-flash-lite'` | `cheapComplete`, `cheapCompleteJSON` | Call scoring (`/api/analyze/score`), transcript truncation (`/api/analyze/process`) |
-| Smart | `'gpt-4o'` | `smartComplete`, `smartCompleteJSON`, `smartStream` | Call analysis (`/api/analyze/run`), synthesis (`/api/analyze/synthesize`), follow-up (`/api/analyze/followup`) |
+| `GONG_RATE_LIMIT_MS` | `350` | `number` (ms) | Delay between consecutive Gong API requests; keeps request rate safely under Gong's ~3 req/s limit |
+| `EXTENSIVE_BATCH_SIZE` | `10` | `number` | Max call IDs per `/v2/calls/extensive` POST request (Gong API limit) |
+| `TRANSCRIPT_BATCH_SIZE` | `50` | `number` | Max call IDs per `/v2/calls/transcript` POST request (Gong API limit); also used in `src/app/api/gong/search/route.ts` |
+| `MAX_RETRIES` | `5` | `number` | Max retry attempts for any Gong API request before throwing; uses exponential backoff (2s, 4s, 8s, 16s, 30s capped) |
 
-### Transcript Surgery — `src/lib/transcript-surgery.ts`
+---
 
-| Constant / Rule | Value | What It Controls |
-|---|---|---|
-| `FILLER_PATTERNS` | Regex matching `hi`, `hello`, `thanks`, `okay`, etc. | Utterances matching any pattern (or shorter than 5 characters) are filtered out before analysis |
-| Minimum utterance word count | `8` words | Utterances under 8 words are skipped entirely during `performSurgery` |
-| Greeting/closing window | `60,000` ms | Utterances in the first or last 60 s of a call with fewer than 15 words are classified as greeting/closing and skipped |
-| Smart truncation threshold | `60` words | Internal rep monologues over 60 words are flagged `needsSmartTruncation = true` and sent to `/api/analyze/process` for LLM-assisted trimming |
-| `WINDOW_MS` (tracker alignment fallback) | `3,000` ms | When a tracker timestamp doesn't fall within any utterance's exact time range, the search expands ±3 s |
-| Context lookback depth | `2` utterances | For each external-speaker utterance, up to 2 preceding utterances are captured as `contextBefore`. If the preceding utterance is < 11 words, the one before it is also included (in `enrichContext`). |
+### `src/app/api/gong/calls/route.ts`
 
-### Analysis Scoring — `src/app/api/analyze/score/route.ts` + `src/components/analyze-panel.tsx`
+| Name | Value | Type | What It Controls |
+|---|---|---|---|
+| `MAX_DATE_RANGE_DAYS` | `365` | `number` (days) | Maximum allowed date range for a call list fetch; prevents accidental multi-year queries |
+| `CHUNK_DAYS` | `30` | `number` (days) | Gong call list queries are split into 30-day windows; Gong performs best with ≤30-day windows |
 
-| Constant | Value | What It Controls |
-|---|---|---|
-| Score range | `0` – `10` | Relevance score for each call; clamped via `Math.max(0, Math.min(10, result.score))` |
-| Neutral fallback score | `5` | Applied when scoring a single call fails, so the call is included at medium priority rather than dropped |
-| Auto-selection threshold | `3` | After scoring, calls with `score >= 3` are pre-selected for full analysis in `AnalyzePanel` |
+---
 
-### Analysis Question Templates — `src/components/analyze-panel.tsx`
+### `src/lib/transcript-formatter.ts`
 
-Defined in the `QUESTION_TEMPLATES` constant:
+| Name | Value | Type | What It Controls |
+|---|---|---|---|
+| `INTERNAL_WORD_THRESHOLD` | `150` | `number` (words) | Internal rep turns with ≥150 words are truncated to first 2 sentences + `[...]` + last 2 sentences when `condenseMonologues` export option is enabled |
 
-| Label | Pre-filled Question |
+---
+
+### `src/lib/transcript-surgery.ts`
+
+| Name | Value | Type | What It Controls |
+|---|---|---|---|
+| `GREETING_CLOSING_WINDOW_MS` | `60_000` | `number` (ms) | Utterances in the first or last 60 seconds of a call with fewer than 15 words are treated as greeting/closing noise and excluded from analysis excerpts |
+| `WINDOW_MS` (in `alignTrackersToUtterances`) | `3000` | `number` (ms) | ±3 second fallback window for aligning tracker occurrences to utterances when exact containment fails |
+| `windowMs` default (in `findNearestOutlineItem`) | `30_000` | `number` (ms) | Search window for matching an outline item description to a given timestamp; uses the closest item within ±30 seconds |
+| Minimum utterance word length (in `performSurgery`) | `8` | `number` (words) | Utterances shorter than 8 words are dropped during surgical extraction (ported from V2) |
+| Smart truncation threshold (in `performSurgery`) | `60` | `number` (words) | Internal monologues with more than 60 words are flagged as `needsSmartTruncation` for AI-assisted condensing via `/api/analyze/process` |
+
+---
+
+### `src/components/analyze-panel.tsx`
+
+| Name | Value | Type | What It Controls |
+|---|---|---|---|
+| `TOKEN_BUDGET` | `800_000` | `number` (tokens) | Maximum input token budget for surgical transcript extraction before calls are excluded from a batch analysis run |
+| `MAX_QUESTIONS` | `5` | `number` | Maximum number of follow-up questions allowed in a single analysis session |
+| `QUESTION_TEMPLATES` | Array of 5 entries | `{ label: string; q: string }[]` | Preset question shortcuts shown in the Analyze panel: "Objections", "Needs", "Competitive", "Feedback", "Questions" |
+
+---
+
+### `src/lib/session.ts`
+
+| Name | Value | Type | What It Controls |
+|---|---|---|---|
+| `SESSION_KEY` | `'gongwizard_session'` | `string` | `sessionStorage` key under which `GongSession` data (`authHeader`, `users`, `trackers`, `workspaces`, `internalDomains`, `baseUrl`) is stored |
+
+---
+
+### `src/hooks/useFilterState.ts`
+
+| Name | Value | Type | What It Controls |
+|---|---|---|---|
+| `STORAGE_KEY` | `'gongwizard_filters'` | `string` | `localStorage` key for persisting filter state (`excludeInternal`, duration range, talk ratio range, `minExternalSpeakers`) across page reloads |
+
+Default filter values applied on first load (or after `resetFilters()`):
+
+| Filter | Default |
 |---|---|
-| `Objections` | `'What objections are customers raising?'` |
-| `Needs` | `'What unmet needs are customers expressing?'` |
-| `Competitive` | `'What are customers saying about competitors?'` |
-| `Feedback` | `'What product feedback are customers giving?'` |
-| `Questions` | `'What questions are customers asking most?'` |
+| `durationMin` | `0` |
+| `durationMax` | `7200` (2 hours) |
+| `talkRatioMin` | `0` |
+| `talkRatioMax` | `100` |
+| `minExternalSpeakers` | `0` |
+| `excludeInternal` | `false` |
 
-### Token Estimation Heuristics — `src/lib/token-utils.ts`
+---
 
-| Function | Rule | Thresholds |
-|---|---|---|
-| `estimateTokens(text)` | `Math.ceil(text.length / 4)` | ~4 characters per token for English text |
-| `contextLabel(tokens)` | Tiered string label | < 8K → GPT-3.5 (8K); < 16K → Claude Haiku (16K); < 32K → ChatGPT Plus (32K); < 128K → GPT-4o / Claude (128K); < 200K → Claude (200K); else → Exceeds most context windows |
-| `contextColor(tokens)` | Tailwind classes | < 32K → `text-green-600`; < 128K → `text-yellow-600`; ≥ 128K → `text-red-600` (dark variants included) |
+### `src/lib/token-utils.ts` — Context Window Labels
 
-### Extensive API Fallback — `src/app/api/gong/calls/route.ts`
-
-| Condition | Behavior |
+| Token Range | Label |
 |---|---|
-| `/v2/calls/extensive` returns HTTP 403 | Sets `extensiveFailed = true`, breaks out of the batch loop, returns normalized basic call data. Resulting `GongCall` objects have empty `parties`, `topics`, `trackers`, `brief`, and `null` `interactionStats`. |
+| < 8,000 | `'Fits GPT-3.5 (8K)'` |
+| < 16,000 | `'Fits Claude Haiku (16K)'` |
+| < 32,000 | `'Fits ChatGPT Plus (32K)'` |
+| < 128,000 | `'Fits GPT-4o / Claude (128K)'` |
+| < 200,000 | `'Fits Claude (200K)'` |
+| ≥ 200,000 | `'Exceeds most context windows'` |
+
+Token estimation formula: `Math.ceil(text.length / 4)` (characters ÷ 4).
+
+---
+
+### Auth Cookie — `src/app/api/auth/route.ts`
+
+| Property | Value |
+|---|---|
+| Cookie name | `gw-auth` |
+| Cookie value (on success) | `'1'` |
+| `httpOnly` | `true` |
+| `maxAge` | `604800` (60 × 60 × 24 × 7 = 7 days) |
+| `path` | `'/'` |
+| `sameSite` | `'lax'` |
+
+---
+
+### Gong API Default Base URL
+
+All Gong proxy routes (`connect`, `calls`, `transcripts`, `search`) accept an optional `baseUrl` field in the POST body. The default when not supplied:
+
+```text
+https://api.gong.io
+```
+
+This allows custom Gong instance URLs (used by some enterprise Gong deployments).
+
+---
+
+### `src/app/api/analyze/batch-run/route.ts`
+
+| Property | Value | What It Controls |
+|---|---|---|
+| `export const maxDuration` | `60` | Vercel serverless function max execution time (seconds) for the batch analysis route |
 
 ---
 
 ## 4. Third-Party Service Configuration
 
-### Gong REST API
+### Google Gemini (AI Analysis)
 
-**Purpose:** Source of all call data — user lists, tracker definitions, workspace info, call metadata, and transcripts.
+| Property | Detail |
+|---|---|
+| **Purpose** | Powers all AI analysis routes: call scoring, per-call finding extraction, batch analysis, synthesis, follow-up Q&A, and internal monologue smart truncation |
+| **Required env var** | `GEMINI_API_KEY` |
+| **SDK package** | `@google/genai` v1.43.0 |
+| **Client initialization** | `src/lib/ai-providers.ts` — lazy-initialized singleton via `getGemini()` |
+| **Cheap tier model** | `gemini-3.1-flash-lite-preview` — used by `cheapComplete` / `cheapCompleteJSON` |
+| **Smart tier model** | `gemini-2.5-pro` — used by `smartComplete` / `smartCompleteJSON` / `smartStream` |
 
-**Required env vars:** None (credentials are user-supplied at runtime).
+**Cheap tier usage (scoring + smart truncation):**
 
-**SDK / client initialization:** No SDK. All requests use native `fetch`. The `makeGongFetch(baseUrl, authHeader)` factory in `src/lib/gong-api.ts` returns a configured `gongFetch` function that is instantiated per-request in each route handler. Error handling uses the `GongApiError` class (carries `status`, `message`, `endpoint`) and the `handleGongError(error)` utility function, both in `src/lib/gong-api.ts`.
+- `src/app/api/analyze/score/route.ts` — relevance scoring, temperature `0.2`, maxTokens `4096`
+- `src/app/api/analyze/process/route.ts` — internal monologue truncation, temperature `0.2`, maxTokens `2048`
 
-**Endpoints proxied:**
+**Smart tier usage (finding extraction + synthesis):**
 
-| Endpoint | Method | Batching | Route File |
-|---|---|---|---|
-| `/v2/users` | GET (cursor-paginated) | — | `src/app/api/gong/connect/route.ts` |
-| `/v2/settings/trackers` | GET (cursor-paginated) | — | `src/app/api/gong/connect/route.ts` |
-| `/v2/workspaces` | GET | — | `src/app/api/gong/connect/route.ts` |
-| `/v2/calls` | GET (cursor-paginated) | — | `src/app/api/gong/calls/route.ts` |
-| `/v2/calls/extensive` | POST | `EXTENSIVE_BATCH_SIZE` = 10 | `src/app/api/gong/calls/route.ts` |
-| `/v2/calls/transcript` | POST | `TRANSCRIPT_BATCH_SIZE` = 50 | `src/app/api/gong/transcripts/route.ts` |
+- `src/app/api/analyze/run/route.ts` — per-call finding extraction, temperature `0.3`, maxTokens `4096`
+- `src/app/api/analyze/batch-run/route.ts` — multi-call batch finding extraction, temperature `0.3`, maxTokens `16384`
+- `src/app/api/analyze/synthesize/route.ts` — synthesis across all findings, temperature `0.3`, maxTokens `4096`
+- `src/app/api/analyze/followup/route.ts` — follow-up Q&A, temperature `0.3`, maxTokens `4096`
 
----
-
-### OpenAI (smart tier)
-
-**Purpose:** High-quality AI completion for analysis, synthesis, and follow-up answer routes.
-
-**Required env var:** `OPENAI_API_KEY`
-
-**Model:** `gpt-4o`
-
-**SDK / client initialization:** `new OpenAI({ apiKey: key })` in `getOpenAI()` in `src/lib/ai-providers.ts`. The client is lazily instantiated and cached in the module-level `_openai` variable.
-
-**Exported functions:** `smartComplete`, `smartCompleteJSON`, `smartStream`
-
-**Used in routes:** `src/app/api/analyze/run/route.ts`, `src/app/api/analyze/synthesize/route.ts`, `src/app/api/analyze/followup/route.ts`
+All JSON-returning routes pass `responseMimeType: 'application/json'` (native JSON mode — no regex extraction needed).
 
 ---
 
-### Google Gemini (cheap tier)
+### Gong API (Call Data)
 
-**Purpose:** Low-cost, fast AI completion for call scoring and internal monologue truncation.
+| Property | Detail |
+|---|---|
+| **Purpose** | Source of all call data: users, trackers, workspaces, call list, extensive call metadata, transcripts |
+| **Required credentials** | User-supplied Gong Access Key + Secret Key, Base64-encoded at runtime into HTTP Basic auth header; transmitted as `X-Gong-Auth` request header |
+| **Auth mechanism** | HTTP Basic Auth (`Authorization: Basic <base64(accessKey:secretKey)>`) |
+| **Client initialization** | `src/lib/gong-api.ts` — `makeGongFetch(baseUrl, authHeader)` factory; no persistent client, credentials are per-request |
+| **Credential storage** | Browser `sessionStorage` only, under key `gongwizard_session`; never stored server-side |
 
-**Required env var:** `GEMINI_API_KEY`
+Endpoints proxied (all via server-side Next.js API routes):
 
-**Model:** `gemini-2.0-flash-lite`
-
-**SDK / client initialization:** `new GoogleGenAI({ apiKey: key })` via `@google/genai` in `getGemini()` in `src/lib/ai-providers.ts`. The client is lazily instantiated and cached in the module-level `_gemini` variable. JSON mode is requested via `responseMimeType: 'application/json'` in the `config` object.
-
-**Exported functions:** `cheapComplete`, `cheapCompleteJSON`
-
-**Used in routes:** `src/app/api/analyze/score/route.ts`, `src/app/api/analyze/process/route.ts`
-
----
-
-### Vercel
-
-**Purpose:** Hosting and deployment platform.
-
-**Required env vars:** `SITE_PASSWORD`, `OPENAI_API_KEY`, `GEMINI_API_KEY` must be set in Vercel project environment variable settings.
-
-**Deploy trigger:** Push to `main` branch auto-deploys.
-
-**No Vercel-specific SDK** is used in application code.
+| Gong Endpoint | Proxy Route |
+|---|---|
+| `GET /v2/users` | `src/app/api/gong/connect/route.ts` |
+| `GET /v2/settings/trackers` | `src/app/api/gong/connect/route.ts` |
+| `GET /v2/workspaces` | `src/app/api/gong/connect/route.ts` |
+| `GET /v2/calls` | `src/app/api/gong/calls/route.ts` |
+| `POST /v2/calls/extensive` | `src/app/api/gong/calls/route.ts` |
+| `POST /v2/calls/transcript` | `src/app/api/gong/transcripts/route.ts`, `src/app/api/gong/search/route.ts` |
 
 ---
 
-## 5. Configuration Dependency Diagram
+### Next.js Fonts (Google Fonts)
+
+| Property | Detail |
+|---|---|
+| **Purpose** | Load Geist Sans and Geist Mono typefaces |
+| **Fonts loaded** | `Geist` (CSS variable `--font-geist-sans`), `Geist_Mono` (CSS variable `--font-geist-mono`) |
+| **Subset** | `["latin"]` |
+| **Initialization** | `src/app/layout.tsx` via `next/font/google` |
+
+No API key required — served via Next.js font optimization.
+
+---
+
+### client-zip (In-Browser ZIP)
+
+| Property | Detail |
+|---|---|
+| **Purpose** | Client-side ZIP creation for the "Export as ZIP" feature (one file per call + `manifest.json`) |
+| **Package** | `client-zip` v2.5.0 |
+| **Usage** | `src/hooks/useCallExport.ts` — `downloadZip(files).blob()` |
+
+No configuration or API keys required.
+
+---
+
+## 5. Middleware Configuration
+
+File: `src/middleware.ts`
+
+The Next.js Edge Middleware enforces site-level authentication on every request.
+
+**Matcher pattern:**
+
+```typescript
+matcher: ['/((?!_next/static|_next/image|favicon.ico).*)']
+```
+
+**Bypass paths (no auth check):**
+
+- `/gate` and all subpaths — the password entry page itself
+- `/api/auth` — sets the `gw-auth` cookie
+- `/api/gong/*` — Gong proxy routes (use `X-Gong-Auth` header instead)
+- `/_next/*` — Next.js internals
+- `/favicon*` — favicon assets
+
+**Auth check:** Reads `gw-auth` cookie; if value is `'1'`, allows through. Otherwise redirects to `/gate`.
+
+---
+
+## 6. Configuration Dependency Diagram
 
 ```mermaid
 graph TD
-    ENV_SP["SITE_PASSWORD"] --> AUTH_ROUTE["src/app/api/auth/route.ts"]
-    ENV_OAI["OPENAI_API_KEY"] --> AI_LIB["src/lib/ai-providers.ts\ngetOpenAI()"]
-    ENV_GEM["GEMINI_API_KEY"] --> AI_LIB2["src/lib/ai-providers.ts\ngetGemini()"]
+    subgraph "Server Environment"
+        ENV_SITE[SITE_PASSWORD]
+        ENV_GEMINI[GEMINI_API_KEY]
+    end
 
-    AI_LIB --> RUN["src/app/api/analyze/run/route.ts\nsmartCompleteJSON → gpt-4o"]
-    AI_LIB --> SYNTH["src/app/api/analyze/synthesize/route.ts\nsmartCompleteJSON → gpt-4o"]
-    AI_LIB --> FOLLOWUP["src/app/api/analyze/followup/route.ts\nsmartCompleteJSON → gpt-4o"]
+    subgraph "Browser Session"
+        SS[sessionStorage<br/>gongwizard_session]
+        LS[localStorage<br/>gongwizard_filters]
+        CK[Cookie: gw-auth]
+    end
 
-    AI_LIB2 --> SCORE["src/app/api/analyze/score/route.ts\ncheapCompleteJSON → gemini-2.0-flash-lite"]
-    AI_LIB2 --> PROCESS["src/app/api/analyze/process/route.ts\ncheapCompleteJSON → gemini-2.0-flash-lite"]
+    subgraph "API Routes"
+        AUTH[/api/auth]
+        CONNECT[/api/gong/connect]
+        CALLS[/api/gong/calls]
+        TRANSCRIPTS[/api/gong/transcripts]
+        SEARCH[/api/gong/search]
+        ANALYZE[/api/analyze/*]
+    end
 
-    GONG_LIB["src/lib/gong-api.ts\nGONG_RATE_LIMIT_MS=350\nEXTENSIVE_BATCH_SIZE=10\nTRANSCRIPT_BATCH_SIZE=50\nMAX_RETRIES=5"] --> CONNECT["src/app/api/gong/connect/route.ts"]
-    GONG_LIB --> CALLS["src/app/api/gong/calls/route.ts"]
-    GONG_LIB --> TRANSCRIPTS["src/app/api/gong/transcripts/route.ts"]
+    subgraph "External Services"
+        GONG[Gong API<br/>api.gong.io]
+        GEMINI[Google Gemini<br/>Flash-Lite + 2.5 Pro]
+    end
 
-    AUTH_ROUTE --> COOKIE["gw-auth cookie\nhttpOnly, 7-day, sameSite:lax"]
-    COOKIE --> MIDDLEWARE["src/middleware.ts\nconfig.matcher: all non-static routes"]
+    ENV_SITE --> AUTH
+    AUTH --> CK
+    CK --> MW[Middleware<br/>src/middleware.ts]
 
-    SESSION["sessionStorage\ngongwizard_session\n{authHeader, users, trackers,\nworkspaces, internalDomains, baseUrl}"] --> CALLS
-    SESSION --> TRANSCRIPTS
-    SESSION --> CONNECT
+    ENV_GEMINI --> ANALYZE
+    ANALYZE --> GEMINI
 
-    LOCALSTORAGE["localStorage\ngongwizard_filters\n(STORAGE_KEY)"] --> FILTER_HOOK["src/hooks/useFilterState.ts"]
+    SS -->|X-Gong-Auth header| CONNECT
+    SS -->|X-Gong-Auth header| CALLS
+    SS -->|X-Gong-Auth header| TRANSCRIPTS
+    SS -->|X-Gong-Auth header| SEARCH
+    CONNECT --> GONG
+    CALLS --> GONG
+    TRANSCRIPTS --> GONG
+    SEARCH --> GONG
+
+    GONG -->|users, trackers, workspaces| SS
+    LS -->|filter persistence| BROWSER[Browser UI<br/>src/app/calls/page.tsx]
 ```

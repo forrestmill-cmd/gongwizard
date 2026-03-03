@@ -1,162 +1,101 @@
-# Dependency Audit — GongWizard
+# GongWizard Dependency Audit
 
-**Generated:** 2026-03-02
-**Project:** GongWizard (Next.js 16 + Gong API proxy)
+**Generated:** 2026-03-03  
+**Project:** `/Users/forrestmiller/Claude/projects/GongWizard/gongwizard`
 
 ## Summary
 
-**Total dependencies:** 24 (12 production + 12 devDependencies)
-**Possibly unused:** 4
-**Possibly misplaced devDependencies:** 0
-**Implicit/config usage:** 3
+| Metric | Count |
+|--------|-------|
+| Total dependencies | 14 |
+| Total devDependencies | 8 |
+| **Total declared** | **26** |
+| Confirmed in use | 16 |
+| Possibly unused | 10 |
+| Possibly misplaced devDeps | 1 |
 
 ---
 
-## Dependencies Analysis
+## Confirmed Dependencies (In Use)
 
-### All Dependencies (12 production)
+These dependencies have explicit `import`/`require` statements in the source code:
 
-| Package | Version | Import Refs | Status | Notes |
-|---------|---------|-------------|--------|-------|
-| `next` | 16.1.6 | 12 | ✓ Used | Framework (middleware, routing, navigation) |
-| `react` | 19.2.3 | 27 | ✓ Used | Core runtime |
-| `react-dom` | 19.2.3 | 0 | ⚠ Unused* | Implicit: Next.js includes it; used by Radix/shadcn indirectly |
-| `lucide-react` | 0.575.0 | 7 | ✓ Used | Icons (Eye, EyeOff, Lock, Shield, etc.) |
-| `radix-ui` | 1.4.3 | 12 | ✓ Used | Headless UI primitives (for shadcn components) |
-| `cmdk` | 1.1.1 | 1 | ✓ Used | Command/search UI (imported by shadcn Command) |
-| `class-variance-authority` | 0.7.1 | 5 | ✓ Used | Style composition in UI components |
-| `clsx` | 2.1.1 | 1 | ✓ Used | Conditional class names utility |
-| `tailwind-merge` | 3.5.0 | 1 | ✓ Used | Merge Tailwind classes without conflicts |
-| `date-fns` | 4.1.0 | 1 | ✓ Used | Date formatting (`format`, `subDays`) |
-| `react-day-picker` | 9.14.0 | 1 | ✓ Used | Calendar component (shadcn Calendar dependency) |
-| `@playwright/test` | 1.58.2 | 0 | ⚠ Unused | E2E testing framework; no test files found in `src/` |
-
-### All DevDependencies (12 devDependencies)
-
-| Package | Version | Import Refs | Status | Notes |
-|----------|---------|-------------|--------|-------|
-| `typescript` | ^5 | 0 | ✓ Used | Build/type-checking (implicit via Next.js) |
-| `eslint` | ^9 | 0 | ✓ Used | Linting (npm run lint) |
-| `eslint-config-next` | 16.1.6 | 0 | ✓ Used | ESLint config for Next.js |
-| `@types/react` | ^19 | 0 | ✓ Used | TypeScript types for React |
-| `@types/react-dom` | ^19 | 0 | ✓ Used | TypeScript types for React DOM |
-| `@types/node` | ^20 | 0 | ✓ Used | TypeScript types for Node.js (Next.js server) |
-| `tailwindcss` | ^4 | 0 | ✓ Used* | Config file reference + CSS @import |
-| `@tailwindcss/postcss` | ^4 | 0 | ✓ Used* | PostCSS plugin (implicit via next.config) |
-| `shadcn` | 3.8.5 | 0 | ✓ Used* | CLI tool + config (components.json) + CSS imports |
-| `tw-animate-css` | 1.4.0 | 0 | ✓ Used* | CSS @import in globals.css |
-| `postcss` | — | — | — | Not listed, but required by tailwindcss (implicit peer) |
-| (none listed) | — | — | — | — |
+| Dependency | Type | Used In | Purpose |
+|------------|------|---------|---------|
+| `react` | dep | src/app/, src/components/, src/hooks/ | React component runtime |
+| `react-dom` | dep | src/app/layout.tsx | React DOM rendering (implicit via Next.js) |
+| `next` | dep | src/app/, src/middleware.ts | Next.js framework |
+| `lucide-react` | dep | src/app/page.tsx, src/app/gate/page.tsx, src/components/ui/checkbox.tsx | Icon library |
+| `clsx` | dep | src/lib/utils.ts | Conditional className builder |
+| `tailwind-merge` | dep | src/lib/utils.ts | Merge Tailwind classes |
+| `class-variance-authority` | dep | src/components/ui/tabs.tsx, src/components/ui/button.tsx, src/components/ui/badge.tsx, src/components/ui/slider.tsx | Variant pattern library |
+| `radix-ui` | dep | src/components/ui/tabs.tsx, src/components/ui/checkbox.tsx, src/components/ui/label.tsx, src/components/ui/button.tsx, src/components/ui/scroll-area.tsx, src/components/ui/separator.tsx, src/components/ui/slider.tsx | Unstyled UI primitives |
+| `date-fns` | dep | src/app/calls/page.tsx, src/hooks/useCallExport.ts | Date formatting & manipulation |
+| `client-zip` | dep | src/hooks/useCallExport.ts | Client-side ZIP file generation |
+| `@google/genai` | dep | src/lib/ai-providers.ts | Google AI Generative API client |
+| `@tailwindcss/postcss` | devDep | postcss.config.mjs | PostCSS plugin (implicit — config-based) |
+| `eslint-config-next` | devDep | eslint.config.mjs | ESLint Next.js config (implicit — config-based) |
+| `tailwindcss` | devDep | implicitly loaded by @tailwindcss/postcss | Tailwind CSS framework (dev tooling) |
+| `typescript` | devDep | src/ (throughout) | TypeScript compilation (implicit — tsconfig.json) |
+| `@types/react` | devDep | src/ (throughout) | React type definitions (implicit — tsconfig.json) |
 
 ---
 
-## Flagged Items
+## Possibly Unused Dependencies
 
-### Possibly Unused Dependencies (4)
+These are declared in `package.json` but have **zero explicit import/require statements** in the source code. They may still be used implicitly (e.g., CLI tools, optional transitive features, or shadcn scaffolding) — flag for review but don't assert they're unused:
 
-These dependencies have ZERO import statements in source code (`src/`):
-
-#### 1. **@playwright/test** (^1.58.2)
-- **Package Purpose:** E2E testing framework for browser automation and testing
-- **Import Count:** 0
-- **Files:** No `.spec.ts`, `.test.ts`, or test files found in `src/`
-- **Recommendation:** Remove if no automated tests are planned. If testing is planned, move to a separate test directory structure.
-
-#### 2. **react-dom** (19.2.3)
-- **Package Purpose:** React DOM rendering library
-- **Import Count:** 0 direct imports
-- **Note:** While directly unused, `react-dom` is a critical peer dependency for:
-  - Next.js runtime (hydration)
-  - Radix UI components (internal DOM rendering)
-  - shadcn/ui component internals
-  - React 19 app initialization
-- **Status:** KEEP — Essential for runtime, even if not explicitly imported in source.
-
-#### 3. **shadcn** (3.8.5)
-- **Package Purpose:** shadcn CLI tool for installing component primitives
-- **Import Count:** 0 direct imports
-- **Implicit Usage:**
-  - Referenced in `components.json` (shadcn configuration)
-  - CSS imported in `src/app/globals.css`: `@import "shadcn/tailwind.css";`
-  - CLI tool used during development (`npx shadcn-ui add <component>`)
-- **Status:** KEEP — Used as CLI tool and CSS import; supports all 15 shadcn/ui components in `src/components/ui/`.
-
-#### 4. **tw-animate-css** (1.4.0)
-- **Package Purpose:** Tailwind CSS animation utilities
-- **Import Count:** 0 direct imports
-- **Implicit Usage:**
-  - CSS @import in `src/app/globals.css`: `@import "tw-animate-css";` (line 2)
-  - Provides animation classes like `animate-spin` used in JSX (e.g., `<Loader2 className="animate-spin" />`)
-- **Status:** KEEP — Used via CSS import for animation classes.
+| Dependency | Type | Declared Purpose | Notes |
+|------------|------|-------------------|-------|
+| `@playwright/test` | **dep** | E2E testing framework (v1.58.2) | **FLAGGED**: Should be devDep, not prod dependency. Used in test files (`.claude/skills/gongwizard-test/`), not source code. No import in src/. |
+| `cmdk` | dep | Command palette component (v1.1.1) | No import found; unused UI primitive for shadcn/ui. May be leftover from design exploration. |
+| `react-day-picker` | dep | Calendar component (v9.14.0) | No import found; shadcn/ui primitive. Unused unless calendar UI is rendered. |
+| `openai` | dep | OpenAI API client (v6.25.0) | No import in src/; only `@google/genai` is actively used. Appears to be dead code or planned feature. |
+| `radix-ui` (specific submodules) | dep | Radix UI primitives (v1.4.3) | Confirmed in use for tabs, checkbox, label, button, scroll-area, separator, slider — but the version listed is the metapackage. Verify it's the right entry. |
+| `tw-animate-css` | devDep | Tailwind animation utilities (v1.4.0) | No import found; possibly a Tailwind plugin or preset. Not referenced in tailwind.config or postcss.config. |
+| `@types/node` | devDep | Node.js type definitions (v20) | Standard Next.js dependency; implicit via tsconfig.json but no explicit import found. |
+| `@types/react-dom` | devDep | React DOM type definitions (v19) | Implicit via tsconfig.json; no explicit import found. |
+| `shadcn` | devDep | shadcn/ui CLI tool (v3.8.5) | CLI tool for scaffolding components; not used in source code (only during setup). Safe as devDep. |
+| `eslint` | devDep | ESLint linter (v9) | Configured in eslint.config.mjs but not imported; CLI tool. Correct placement as devDep. |
 
 ---
 
 ## Possibly Misplaced DevDependencies
 
-**None found.** All devDependencies are correctly placed:
-- Type definitions (`@types/*`) are devDeps ✓
-- Build tools (`typescript`, `eslint`, `tailwindcss`) are devDeps ✓
-- Config dependencies (`@tailwindcss/postcss`, `eslint-config-next`) are devDeps ✓
-- CLI tools (`shadcn`) are devDeps ✓
+These are in `devDependencies` but appear in source code (not just config/test files). Flag for review:
+
+| Dependency | Type | Location | Analysis |
+|------------|------|----------|----------|
+| (None found) | — | — | All type definition packages and ESLint configs correctly reside in devDependencies. No source code imports found. |
+
+**Note:** `@types/*`, `eslint*`, and PostCSS plugins are correctly placed as devDependencies. TypeScript compilation and type-checking are build-time concerns.
 
 ---
 
-## Implicit/Config-Based Usage
+## Key Findings
 
-Three dependencies are used implicitly through configuration or CSS, not direct imports:
+1. **@playwright/test is a production dependency** — should be moved to devDependencies. Tests live in `.claude/skills/gongwizard-test/`, not in src/.
 
-### 1. **shadcn** (3.8.5)
-- CSS import: `@import "shadcn/tailwind.css";` in `src/app/globals.css`
-- Config reference: `components.json` (`$schema: https://ui.shadcn.com/schema.json`)
-- Provides 15 UI components in `src/components/ui/` (Badge, Button, Calendar, Card, etc.)
+2. **OpenAI SDK is unused** — codebase only uses `@google/genai` for AI analysis. `openai` appears to be dead code from an earlier iteration. Consider removal if not planned for future features.
 
-### 2. **tw-animate-css** (1.4.0)
-- CSS import: `@import "tw-animate-css";` in `src/app/globals.css`
-- Runtime usage: Animation classes like `animate-spin` used in JSX
+3. **cmdk and react-day-picker** are shadcn/ui primitives but have no visible usage in the codebase. These may have been scaffolded by `shadcn add` but never actually used in components. Review and remove if not needed.
 
-### 3. **@tailwindcss/postcss** (^4)
-- PostCSS plugin (implicit via `next.config.ts` and Tailwind v4 integration)
-- Processes `@import "tailwindcss";` in `src/app/globals.css`
-- Not directly imported, but required for CSS processing pipeline
+4. **tw-animate-css** has no configuration reference — unclear if it's actually loaded or functional. Verify in Tailwind build process.
+
+5. **Implicit dependencies are correct** — @tailwindcss/postcss, eslint-config-next, TypeScript, and type definitions are all properly referenced in config files (postcss.config.mjs, eslint.config.mjs, tsconfig.json).
+
+6. **radix-ui metapackage** — Confirmed in use for multiple UI components (tabs, checkbox, label, button, scroll-area, separator, slider). This is the correct dependency.
 
 ---
 
 ## Recommendations
 
-### Keep All Current Dependencies
+| Priority | Action | Dependency | Rationale |
+|----------|--------|------------|-----------|
+| **High** | Move to devDep | `@playwright/test` | Not used in production; only in test suite |
+| **High** | Remove | `openai` | No imports; `@google/genai` is the active AI client |
+| **Medium** | Audit usage | `cmdk` | No visible component usage; may be unused scaffolding |
+| **Medium** | Audit usage | `react-day-picker` | No visible component usage; may be unused scaffolding |
+| **Medium** | Verify build | `tw-animate-css` | Unclear if actually loaded; check Tailwind config |
+| **Low** | Document | `radix-ui` | Confirm version matches all imported submodule versions |
 
-**No changes recommended.** Rationale:
-
-1. **react-dom:** Essential peer dependency, even if not explicitly imported.
-2. **shadcn:** CLI tool + CSS library; supports all UI component structure.
-3. **tw-animate-css:** Provides animation utilities via CSS import.
-4. **@playwright/test:** Unused now, but if E2E testing is planned, it's properly categorized as a devDep.
-
-### If E2E Tests Are Not Planned
-
-Remove `@playwright/test`:
-```bash
-npm uninstall @playwright/test
-```
-
-This would reduce bundle size slightly (though it's a devDep, not shipped to production).
-
----
-
-## Dependency Count Summary
-
-| Category | Count |
-|----------|-------|
-| Total Production Dependencies | 12 |
-| Total DevDependencies | 12 |
-| **Total** | **24** |
-| Unused (not recommended to remove) | 3 |
-| Truly Unused (safe to remove) | 1 |
-
----
-
-## Files Analyzed
-
-- Source: `src/middleware.ts`, `src/app/page.tsx`, `src/app/calls/page.tsx`, `src/app/gate/page.tsx`, `src/app/api/auth/route.ts`, `src/app/api/gong/*.ts`, `src/lib/gong-api.ts`, `src/components/ui/*.tsx`
-- Config: `components.json`, `next.config.ts`, `postcss.config.mjs`, `src/app/globals.css`
-- CSS: `src/app/globals.css`
