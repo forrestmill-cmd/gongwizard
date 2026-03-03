@@ -287,7 +287,8 @@ export function formatExcerptsForAnalysis(
   talkRatioPct: number,
   trackersFired: string[],
   relevantSections: string[],
-  keyPoints: string[]
+  keyPoints: string[],
+  externalOnly: boolean = false
 ): string {
   let out = `Call: ${callTitle} (${callDate}) | Account: ${accountName} | Talk ratio: ${talkRatioPct}%\n`;
   if (keyPoints.length > 0) {
@@ -315,6 +316,11 @@ export function formatExcerptsForAnalysis(
       if (ex.outlineItemText && ex.outlineItemText !== lastOutlineItem) {
         out += `  [Gong AI: "${ex.outlineItemText}"]\n\n`;
         lastOutlineItem = ex.outlineItemText;
+      }
+
+      // In externalOnly mode, skip utterance text for internal speakers
+      if (externalOnly && ex.isInternal) {
+        continue;
       }
 
       out += `  [${ex.timestampFormatted}]`;

@@ -13,35 +13,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Score calls in batches of 8 to avoid rate-limit bursts
-    const BATCH_SIZE = 8;
-    const allResults: any[] = [];
-    for (let i = 0; i < calls.length; i += BATCH_SIZE) {
-      const batch = calls.slice(i, i + BATCH_SIZE);
-      const batchResults = await Promise.all(batch.map((call: any) => scoreCall(call, question)));
-      allResults.push(...batchResults);
-    }
+    const prompt = `Score each of the following ${calls.length} sales calls for relevance to this research question: "${question}"
 
-    return NextResponse.json({ scores: allResults });
-  } catch (error) {
-    console.error('Score route error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Scoring failed' },
-      { status: 500 }
-    );
-  }
-}
+For each call, return a score 0-10, a one-sentence reason, and the section names from the outline that likely contain relevant signal.
 
-async function scoreCall(call: any, question: string) {
+Return JSON exactly: { "scores": [{ "callId": "...", "score": 0-10, "reason": "one sentence", "relevant_sections": ["section name", ...] }] }
+Include all ${calls.length} calls in the scores array in the same order.
+
+${calls.map((call: any, i: number) => {
   const trackerNames = (call.trackers || [])
     .map((t: any) => t.name || t)
     .filter(Boolean);
 
-  const outlineSections = (call.outline || [])
-    .map((s: any) => s.name)
-    .filter(Boolean);
-
-  // Build outline with Gong AI item descriptions (up to 3 per section, 100 chars each)
   const outlineSummary = (call.outline || [])
     .filter((s: any) => s.name)
     .map((s: any) => {
@@ -55,44 +38,56 @@ async function scoreCall(call: any, question: string) {
     })
     .join('\n');
 
-  const prompt = `You are scoring a sales call for relevance to a research question.
+  return `
+=== CALL ${i + 1}: ${call.id} | ${call.title || 'Untitled'} ===
+Brief: ${call.brief || 'None'}
+Key points: ${(call.keyPoints || []).join(' | ') || 'None'}
+Trackers fired: ${trackerNames.join(', ') || 'None'}
+Topics: ${(call.topics || []).join(', ') || 'None'}
+Talk ratio (internal): ${call.talkRatio != null ? Math.round(call.talkRatio * 100) + '%' : 'Unknown'}
 
-Research question: "${question}"
+Outline:
+${outlineSummary || 'None'}`;
+}).join('\n')}`;
 
-Call metadata:
-- Title: ${call.title || 'Untitled'}
-- Brief: ${call.brief || 'No summary available'}
-- Key points: ${(call.keyPoints || []).join(' | ') || 'None'}
-- Trackers fired: ${trackerNames.join(', ') || 'None'}
-- Topics: ${(call.topics || []).join(', ') || 'None'}
-- Talk ratio: ${call.talkRatio != null ? Math.round(call.talkRatio * 100) + '%' : 'Unknown'}
+    try {
+      const result = await cheapCompleteJSON<{
+        scores: Array<{
+          callId: string;
+          score: number;
+          reason: string;
+          relevant_sections: string[];
+        }>;
+      }>(prompt, { temperature: 0.2, maxTokens: 4096 });
 
-Call outline with Gong AI topic summaries:
-${outlineSummary || 'None'}
+      const normalizedScores = (result.scores || []).map((s: any) => ({
+        callId: s.callId,
+        score: Math.max(0, Math.min(10, s.score || 0)),
+        reason: s.reason || '',
+        relevantSections: s.relevant_sections || [],
+      }));
 
-Score this call 0-10 for relevance to the research question.
-Return JSON: { "score": <0-10>, "reason": "<one sentence>", "relevant_sections": ["<section names from outline that likely contain signal>"] }`;
-
-  try {
-    const result = await cheapCompleteJSON<{
-      score: number;
-      reason: string;
-      relevant_sections: string[];
-    }>(prompt, { temperature: 0.2, maxTokens: 512 });
-
-    return {
-      callId: call.id,
-      score: Math.max(0, Math.min(10, result.score || 0)),
-      reason: result.reason || '',
-      relevantSections: result.relevant_sections || [],
-    };
-  } catch (err) {
-    console.error(`Scoring failed for call ${call.id}:`, err);
-    return {
-      callId: call.id,
-      score: 5, // neutral fallback
-      reason: 'Scoring failed — included at neutral priority',
-      relevantSections: outlineSections,
-    };
+      return NextResponse.json({ scores: normalizedScores });
+    } catch (err) {
+      console.error('Batch scoring failed, returning neutral scores:', err);
+      const fallbackScores = calls.map((call: any) => {
+        const outlineSections = (call.outline || [])
+          .map((s: any) => s.name)
+          .filter(Boolean);
+        return {
+          callId: call.id,
+          score: 5,
+          reason: 'Scoring failed — included at neutral priority',
+          relevantSections: outlineSections,
+        };
+      });
+      return NextResponse.json({ scores: fallbackScores });
+    }
+  } catch (error) {
+    console.error('Score route error:', error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Scoring failed' },
+      { status: 500 }
+    );
   }
 }

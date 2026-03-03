@@ -41,8 +41,8 @@ export function buildUtterances(
 
     if (starts.length === 0) continue;
 
-    const startTimeMs = Math.min(...starts);
-    const endTimeMs = Math.max(...ends);
+    const startTimeMs = Math.min(...starts) * 1000;   // Gong sentences.start is seconds → ms
+    const endTimeMs = Math.max(...ends) * 1000;
     const midTimeMs = (startTimeMs + endTimeMs) / 2;
     const text = sentences.map(s => s.text).join(' ');
 

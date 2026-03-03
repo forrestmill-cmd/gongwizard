@@ -14,6 +14,7 @@ interface SpeakerEntry {
 interface CallPayload {
   callId: string;
   callData: string;
+  brief: string;
   speakerDirectory: SpeakerEntry[];
   callMeta: { title: string; date: string };
 }
@@ -76,8 +77,12 @@ export async function POST(request: NextRequest) {
     // Build per-call sections
     const callSections = calls
       .map(c => {
-        const header = `=== CALL ${c.callId}: ${c.callMeta.title} | ${c.callMeta.date} ===`;
-        return `${header}\n${c.callData}`;
+        const externalSpeakersForCall = c.speakerDirectory
+          .filter(s => !s.isInternal)
+          .map(s => `- ${s.name}${s.jobTitle ? `, ${s.jobTitle}` : ''}${s.company ? ` at ${s.company}` : ''}`)
+          .join('\n');
+        const header = `=== CALL [${c.callId}]: ${c.callMeta.title} | ${c.callMeta.date} ===`;
+        return `${header}\n${c.brief ? `Summary: ${c.brief}\n` : ''}${externalSpeakersForCall ? `External speakers:\n${externalSpeakersForCall}\n` : ''}${c.callData}`;
       })
       .join('\n\n');
 

@@ -22,7 +22,7 @@ import { performSurgery, formatExcerptsForAnalysis } from '@/lib/transcript-surg
 
 // ─── Inline token utilities (safe for client components) ────────────────────
 
-const TOKEN_BUDGET = 250_000;
+const TOKEN_BUDGET = 800_000;
 const MAX_QUESTIONS = 5;
 
 function estimateInputTokens(text: string): number {
@@ -242,6 +242,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
       const callPayloads: Array<{
         callId: string;
         callData: string;
+        brief: string;
         speakerDirectory: Array<{ speakerId: string; name: string; jobTitle: string; company: string; isInternal: boolean }>;
         callMeta: { title: string; date: string };
       }> = [];
@@ -349,7 +350,8 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
           call.talkRatio != null ? Math.round(call.talkRatio * 100) : 0,
           trackerNames,
           surgery.sectionsUsed,
-          call.keyPoints || []
+          call.keyPoints || [],
+          true  // externalOnly — Gong AI outline items replace internal speaker text
         );
 
         // Prepend speaker directory to processed data for follow-up context
@@ -379,6 +381,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         callPayloads.push({
           callId: sc.callId,
           callData: enrichedCallData,
+          brief: call.brief || '',
           speakerDirectory,
           callMeta: { title: callTitle, date: callDate },
         });
