@@ -58,7 +58,7 @@ export function useFilterState() {
   const [activeTrackers, setActiveTrackers] = useState<Set<string>>(new Set());
   const [activeTopics, setActiveTopics] = useState<Set<string>>(new Set());
 
-  // Ref always holds current filter values to avoid stale closures
+  // currentFilters ref: updatePersisted has [] deps for a stable reference; this ref lets it read current filter values without re-creating the callback on every filter change
   const currentFilters = useRef({ excludeInternal, durationRange, talkRatioRange, minExternalSpeakers });
   useEffect(() => {
     currentFilters.current = { excludeInternal, durationRange, talkRatioRange, minExternalSpeakers };
@@ -135,6 +135,7 @@ export function useFilterState() {
     setSearchText('');
     setParticipantSearch('');
     setAiContentSearch('');
+    // Use raw setters intentionally — bypass persistence wrappers so defaults aren't re-persisted during reset, then clear storage directly
     setExcludeInternalRaw(false);
     setDurationRangeRaw([0, 7200]);
     setTalkRatioRangeRaw([0, 100]);
