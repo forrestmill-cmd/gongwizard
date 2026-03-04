@@ -23,6 +23,8 @@ export const TRANSCRIPT_BATCH_SIZE = 50;
 export const MAX_RETRIES = 5;
 
 export function makeGongFetch(baseUrl: string, authHeader: string) {
+  const retryDelayMs = (attempt: number) => Math.min(2 ** attempt * 2, 30) * 1000;
+
   return async function gongFetch(endpoint: string, options: RequestInit = {}) {
     const url = `${baseUrl}${endpoint}`;
     let lastError: unknown;
@@ -49,7 +51,7 @@ export function makeGongFetch(baseUrl: string, authHeader: string) {
 
         if (response.status === 429) {
           const retryAfter = response.headers.get('Retry-After');
-          const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : Math.min(2 ** attempt * 2, 30) * 1000;
+          const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : retryDelayMs(attempt);
           console.warn(`Gong API rate limited on ${endpoint}, attempt ${attempt + 1}/${MAX_RETRIES}, retrying in ${delayMs}ms`);
           await sleep(delayMs);
           continue;
@@ -58,7 +60,7 @@ export function makeGongFetch(baseUrl: string, authHeader: string) {
         const text = await response.text().catch(() => '');
         lastError = new GongApiError(response.status, text, endpoint);
         // Exponential backoff: 2s, 4s, 8s, 16s, 30s (capped)
-        const delayMs = Math.min(2 ** attempt * 2, 30) * 1000;
+        const delayMs = retryDelayMs(attempt);
         console.warn(`Gong API error ${response.status} on ${endpoint}, attempt ${attempt + 1}/${MAX_RETRIES}, retrying in ${delayMs}ms`);
         await sleep(delayMs);
       } catch (err) {
@@ -66,7 +68,7 @@ export function makeGongFetch(baseUrl: string, authHeader: string) {
           throw err;
         }
         lastError = err;
-        const delayMs = Math.min(2 ** attempt * 2, 30) * 1000;
+        const delayMs = retryDelayMs(attempt);
         console.warn(`Gong API network error on ${endpoint}, attempt ${attempt + 1}/${MAX_RETRIES}, retrying in ${delayMs}ms`, err);
         await sleep(delayMs);
       }

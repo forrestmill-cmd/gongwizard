@@ -95,11 +95,11 @@ export function buildChapterWindows(
  */
 function isInWindow(
   timestampMs: number,
-  windows: Array<{ startMs: number; endMs: number }>
+  windows: Array<{ name: string; startMs: number; endMs: number }>
 ): string | null {
   for (const w of windows) {
     if (timestampMs >= w.startMs && timestampMs <= w.endMs) {
-      return (w as any).name || null;
+      return w.name || null;
     }
   }
   return null;
