@@ -1,8 +1,8 @@
-# GongWizard Dependency Audit
+# Dependency Audit for GongWizard
 
-**Generated:** 2026-03-03  
-**Codebase analyzed:** `/Users/forrestmiller/Claude/projects/GongWizard/gongwizard/src/`  
-**Source files scanned:** 41 TypeScript/JavaScript files
+**Generated:** 2026-03-04  
+**Project:** GongWizard v4  
+**Analysis:** Comprehensive import scan of `/src` directory
 
 ---
 
@@ -10,107 +10,154 @@
 
 | Metric | Count |
 |--------|-------|
-| Total dependencies | 25 |
-| Dependencies with imports in `src/` | 10 |
-| Possibly unused (zero imports) | 15 |
-| Misplaced devDependencies | 0 |
+| Total Dependencies | 15 |
+| Total DevDependencies | 10 |
+| **Total Packages** | **25** |
+| Dependencies with Imports Found | 11 |
+| Dependencies with NO Imports | 4 |
+| DevDependencies with NO Imports | 10 |
 
 ---
 
-## Possibly Unused Dependencies (15)
+## Possibly Unused Dependencies
 
-These packages appear in `package.json` but have **zero import statements** in the source code (`src/`). Many are legitimate (CLI tools, config plugins, type definitions) and likely used implicitly. See **Notes** section below.
+These packages are listed in `package.json` but have **zero explicit import statements** found in the `/src` directory. Some are used implicitly (config files, CLI tools, peer dependencies, plugins) — flag but do not assert they're unused.
 
-### Production Dependencies (3)
+### Production Dependencies (No Imports Found)
 
-| Package | Version | Purpose | Status |
-|---------|---------|---------|--------|
-| `@playwright/test` | `^1.58.2` | End-to-end testing framework | [Implicit] CLI tool; tests live in `.claude/skills/gongwizard-test/` |
-| `cmdk` | `^1.1.1` | Command palette primitive from shadcn/ui | [Possible] May be for future command menu component |
-| `openai` | `^6.25.0` | OpenAI SDK | [Possible] Commented out or planned; only Gemini currently used |
-| `react-day-picker` | `^9.14.0` | Calendar/date range picker | [Possible] Depends on radix-ui; may be in shadcn component that's installed but not used |
-| `react-dom` | `19.2.3` | React DOM runtime | [Implicit] Required peer dependency; implicitly used by React |
-
-### DevDependencies (10)
-
-| Package | Version | Purpose | Status |
-|---------|---------|---------|--------|
-| `@tailwindcss/postcss` | `^4` | Tailwind CSS PostCSS plugin | [Implicit] Loaded by `postcss.config.mjs` |
-| `@types/node` | `^20` | TypeScript node types | [Implicit] Used by TypeScript compiler and runtime |
-| `@types/react` | `^19` | TypeScript React type definitions | [Implicit] Used by TypeScript compiler |
-| `@types/react-dom` | `^19` | TypeScript React DOM type definitions | [Implicit] Used by TypeScript compiler |
-| `eslint` | `^9` | Code linter | [Implicit] CLI tool; invoked via `npm run lint` |
-| `eslint-config-next` | `16.1.6` | ESLint config for Next.js | [Implicit] Extends in `eslint.config.mjs` |
-| `shadcn` | `^3.8.5` | shadcn/ui CLI tool | [Implicit] CLI tool for scaffolding components; no runtime imports needed |
-| `tailwindcss` | `^4` | Utility-first CSS framework | [Implicit] Loaded by `postcss.config.mjs` and `tailwind.config.ts` |
-| `tw-animate-css` | `^1.4.0` | Animation utilities for Tailwind | [Implicit] Likely loaded via config or Tailwind's extend mechanism |
-| `typescript` | `^5` | TypeScript compiler | [Implicit] Used during dev/build; invoked by Next.js |
+| Package | Version | Purpose (from package.json) | Notes |
+|---------|---------|---------------------------|-------|
+| `@playwright/test` | ^1.58.2 | End-to-end smoke tests | **Actually Used**: Imported in Playwright test files (`.claude/skills/gongwizard-test/*.py`) running via Python, not TypeScript/JavaScript imports |
+| `openai` | ^6.25.0 | OpenAI SDK / In package.json; not used in current route handlers | **Status**: Declared but unused; marked as "not used in current route handlers" per CLAUDE.md |
+| `react-dom` | 19.2.3 | React DOM runtime | **Actually Used (Implicit)**: Required by Next.js App Router and React 19; no explicit imports needed in modern React (React 19 uses JSX transform) |
 
 ---
 
-## Misplaced DevDependencies
+## All Dependencies Audit (Detailed)
 
-**None found.** All devDependencies are appropriately scoped (type definitions, linters, build tools, CLI utilities).
+### Actively Used (11 packages)
 
----
-
-## Packages Actually Imported in `src/`
-
-These 10 packages have confirmed imports across the source code:
-
-| Package | Files | Usage Pattern |
-|---------|-------|----------------|
-| `@google/genai` | 1 | Gemini API calls in analysis routes |
-| `class-variance-authority` | 3 | Component variant composition in UI components |
-| `client-zip` | 1 | Browser-side ZIP creation for bulk exports |
-| `clsx` | 1 | Conditional className utility in `utils.ts` |
-| `date-fns` | 2 | Date formatting in export filenames and components |
-| `lucide-react` | 3 | SVG icons throughout UI |
-| `next` | 17 | Core framework (routes, middleware, images, headers, etc.) |
-| `radix-ui` | 8 | Headless UI primitives (Checkbox, Tabs, Slider, Label, etc.) |
-| `react` | 16 | Component definitions, hooks across all pages/components |
-| `tailwind-merge` | 1 | Tailwind class merging in `cn()` utility |
+| Package | Version | Import Count | Usage Files | Status |
+|---------|---------|---------------|-------------|--------|
+| `@google/genai` | ^1.43.0 | 1 | `src/lib/ai-providers.ts` | ✅ Used for Gemini Flash-Lite and 2.5 Pro |
+| `class-variance-authority` | ^0.7.1 | 3 | `src/components/ui/{tabs,badge}.tsx` | ✅ Variant-based className composition |
+| `client-zip` | ^2.5.0 | 1 | `src/hooks/useCallExport.ts` | ✅ Browser-side ZIP export |
+| `clsx` | ^2.1.1 | 1 | `src/lib/utils.ts` | ✅ Conditional className joining |
+| `cmdk` | ^1.1.1 | 1 | `src/components/ui/command.tsx` | ✅ Command palette primitive |
+| `date-fns` | ^4.1.0 | 3 | `src/app/{calls,page}.tsx` | ✅ Date formatting in exports and UI |
+| `lucide-react` | ^0.575.0 | 9 | `src/app/{calls,gate}/page.tsx`, UI components | ✅ SVG icon library |
+| `next` | 16.1.6 | 19 | `src/middleware.ts`, Route Handlers | ✅ Framework, Edge Middleware, Route Handlers |
+| `radix-ui` | ^1.4.3 | 10 | `src/components/ui/{tabs,slider,checkbox,etc}.tsx` | ✅ Headless UI primitives |
+| `react` | 19.2.3 | 23 | `src/app/**/*.tsx` | ✅ UI component framework |
+| `react-day-picker` | ^9.14.0 | 2 | `src/app/page.tsx`, `src/components/ui/calendar.tsx` | ✅ Calendar/date range picker |
+| `tailwind-merge` | ^3.5.0 | 1 | `src/lib/utils.ts` | ✅ Tailwind class conflict resolution in `cn()` |
 
 ---
 
-## Notes
+## DevDependencies Audit (All Not Imported)
 
-### Implicitly Used Dependencies
+All **10 devDependencies** have **zero imports** in source code. This is **expected and correct** — they are tools/configuration only:
 
-These are legitimate and should **not be removed**:
-
-- **CLI tools** (`eslint`, `tailwindcss`, `shadcn`, `@playwright/test`): Invoked via npm scripts or the command line; no direct imports needed.
-- **Type definitions** (`@types/*`): Used during TypeScript compilation; no runtime imports.
-- **PostCSS plugins** (`@tailwindcss/postcss`, `tw-animate-css`): Loaded by `postcss.config.mjs`; used during CSS processing.
-- **Framework loaders** (`typescript`): Invoked by the build system.
-
-### Candidates for Removal
-
-**If not planning to use in the near future:**
-
-- **`cmdk`** (`^1.1.1`): Command palette primitive. Currently unused; remove if not planned.
-- **`openai`** (`^6.25.0`): OpenAI SDK. Currently all AI calls go through Gemini. Remove if no plans to switch back.
-- **`react-day-picker`** (`^9.14.0`): Unused calendar picker. The installed shadcn/ui component may not be referenced. Safe to remove if no date-range filtering is needed.
-
-### Recommendation
-
-Keep all current dependencies unless you explicitly plan to:
-- Add OpenAI as a secondary AI provider (currently Gemini-only)
-- Add a command menu to the UI (currently no cmdk-based UI components)
-- Implement a date-range filter requiring react-day-picker (not in current feature set)
-
-The unused packages add **~150 KB combined** to bundle size (gzipped). If performance is a concern, audit and remove `cmdk`, `openai`, and `react-day-picker` after confirming no planned usage.
+| Package | Version | Purpose | Implicit Usage |
+|---------|---------|---------|---|
+| `@tailwindcss/postcss` | ^4 | PostCSS plugin for Tailwind v4 | ✅ Loaded via `postcss.config.js` |
+| `@types/node` | ^20 | TypeScript types for Node.js APIs | ✅ Type checking in Route Handlers (API routes) |
+| `@types/react` | ^19 | TypeScript types for React 19 | ✅ Type checking all `.tsx` files |
+| `@types/react-dom` | ^19 | TypeScript types for React 19 DOM | ✅ Type checking React components |
+| `eslint` | ^9 | Linter | ✅ CLI tool (`npm run lint`) |
+| `eslint-config-next` | 16.1.6 | ESLint config for Next.js | ✅ Loaded via `.eslintrc.json` |
+| `shadcn` | ^3.8.5 | Component scaffolding CLI | ✅ CLI tool (`npx shadcn add ...`) |
+| `tailwindcss` | ^4 | Utility-first CSS framework | ✅ Loaded via `tailwind.config.js` |
+| `tw-animate-css` | ^1.4.0 | Animation utilities for Tailwind | ✅ CSS utilities in Tailwind config/PostCSS |
+| `typescript` | ^5 | TypeScript compiler | ✅ Build tool (`npm run build`, `npm run dev`) |
 
 ---
 
-## Analysis Methodology
+## Dependency Categories
 
-1. Extracted all 25 packages from `package.json` (15 dependencies, 10 devDependencies)
-2. Scanned 41 source files in `src/` for:
-   - `import X from 'package-name'`
-   - `require('package-name')`
-   - `require.resolve('package-name')`
-3. Flagged packages with zero import statements as "possibly unused"
-4. Cross-referenced with config files (`postcss.config.mjs`, `eslint.config.mjs`, `next.config.ts`) to identify implicit uses
-5. Verified devDependencies not used in source code (all 10 are appropriately scoped to tooling/config)
+### 1. Core Framework
+- `next` — Framework (App Router, Route Handlers, Middleware)
+- `react` — UI runtime
+- `react-dom` — DOM API (implicit via React 19)
+
+### 2. UI & Styling
+- `tailwindcss` — CSS framework (devDep, loaded via config)
+- `tailwind-merge` — Class conflict resolution
+- `clsx` — Conditional class binding
+- `class-variance-authority` — Variant composition
+- `lucide-react` — Icon library
+
+### 3. UI Component Primitives
+- `radix-ui` — Accessible headless UI (Tabs, Slider, Checkbox, etc.)
+- `cmdk` — Command palette
+- `react-day-picker` — Calendar/date picker
+
+### 4. Utilities & Data
+- `date-fns` — Date formatting
+- `client-zip` — ZIP export (browser-side)
+
+### 5. AI Integration
+- `@google/genai` — Gemini API client
+- `openai` — OpenAI SDK (declared but unused)
+
+### 6. Testing
+- `@playwright/test` — E2E test framework (used via Python tests, not TS imports)
+
+### 7. Type Checking & Linting (DevDeps)
+- `@types/node`, `@types/react`, `@types/react-dom` — TypeScript definitions
+- `typescript` — Compiler
+- `eslint`, `eslint-config-next` — Code quality
+
+### 8. PostCSS & CSS Tools (DevDeps)
+- `@tailwindcss/postcss` — PostCSS plugin
+- `tw-animate-css` — Animation utilities
+
+### 9. CLI/Scaffolding (DevDeps)
+- `shadcn` — Component scaffolding
+
+---
+
+## Recommendations
+
+### Remove (if not planned)
+- **`openai` (v6.25.0)** — Currently unused. Remove if OpenAI integration is not planned. If it is planned, move this note to the CLAUDE.md feature roadmap.
+
+### Keep As-Is (All Others)
+All other dependencies are either:
+1. **Actively used** in source code (11 packages)
+2. **Implicitly required** by framework/tooling (`react-dom`, all devDeps)
+3. **Planned for future use** (e.g., testing framework awaiting more extensive test suite)
+
+### Notes on Implicit Usage
+- **`react-dom`** — Required by Next.js but not explicitly imported in modern React 19 (JSX transform handles it)
+- **`@types/*`** — Required by TypeScript compiler; used in type-checking, not at runtime
+- **`@tailwindcss/postcss`, `tailwindcss`** — Loaded via `postcss.config.ts` and `tailwind.config.ts`; no direct imports needed
+- **`tw-animate-css`** — Animation utilities available via Tailwind config; used in class names but not imported
+
+---
+
+## Analysis Method
+
+1. **Dependency extraction**: Parsed `/package.json` (dependencies + devDependencies)
+2. **Import scan**: Recursive grep search for `from ['"]<package>` in `/src` directory (`.ts`, `.tsx`, `.js`, `.jsx` files only)
+3. **Implicit usage check**: Verified PostCSS, Tailwind, and TypeScript integration via config files and framework expectations
+4. **Test file verification**: Confirmed `@playwright/test` is used in `/` `.claude/skills/gongwizard-test/*.py` (Python test suite)
+
+---
+
+## Export Formats Using These Deps
+
+The following export pipelines depend on multiple dependencies working in concert:
+
+| Export Type | Key Dependencies |
+|---|---|
+| **Markdown** | `date-fns`, `next` (API route) |
+| **XML** | `date-fns`, `next` |
+| **JSONL** | `date-fns`, `next` |
+| **CSV (Summary)** | `date-fns`, `next` |
+| **CSV (Utterance-level)** | `date-fns`, `next` |
+| **ZIP Bundle** | `client-zip`, `date-fns`, `next` |
+| **UI Filtering** | `react`, `radix-ui`, `cmdk`, `lucide-react` |
+| **AI Analysis** | `@google/genai`, `next` |
+| **Calendar Date Range** | `react-day-picker`, `date-fns`, `react` |
 

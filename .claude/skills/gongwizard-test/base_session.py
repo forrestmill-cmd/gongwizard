@@ -92,11 +92,38 @@ def pass_gate(page, base_url: str = BASE_URL) -> None:
 def inject_session(page, base_url: str = BASE_URL, env_path: Path = ENV_FILE) -> None:
     """
     Inject the Gong session into sessionStorage on the app origin.
+    Calls the connect API to get full session data (trackers, users, workspaces, internalDomains).
     Must be called after the page is on the app origin (not /gate redirect).
     """
     session_data = get_session_data(env_path)
     page.goto(base_url)
     page.wait_for_load_state('networkidle')
+
+    # Call the connect API to get trackers, users, workspaces, internalDomains
+    connect_result = page.evaluate(f"""async () => {{
+        try {{
+            const res = await fetch('{base_url}/api/gong/connect', {{
+                method: 'POST',
+                headers: {{
+                    'Content-Type': 'application/json',
+                    'X-Gong-Auth': '{session_data["authHeader"]}',
+                }},
+                body: JSON.stringify({{ baseUrl: '{session_data["baseUrl"]}' }}),
+            }});
+            if (!res.ok) return {{ error: 'connect failed: ' + res.status }};
+            return await res.json();
+        }} catch (e) {{
+            return {{ error: String(e) }};
+        }}
+    }}""")
+
+    if isinstance(connect_result, dict) and 'error' not in connect_result:
+        # Merge connect data into session
+        session_data['trackers'] = connect_result.get('trackers', [])
+        session_data['users'] = connect_result.get('users', [])
+        session_data['workspaces'] = connect_result.get('workspaces', [])
+        session_data['internalDomains'] = connect_result.get('internalDomains', session_data.get('internalDomains', []))
+
     page.evaluate(
         f"() => sessionStorage.setItem('gongwizard_session', JSON.stringify({json.dumps(session_data)}))"
     )

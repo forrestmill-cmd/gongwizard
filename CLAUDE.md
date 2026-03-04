@@ -1,6 +1,6 @@
 # GongWizard
 
-Last doc-update: 2026-03-03
+Last doc-update: 2026-03-04
 
 Web app that helps Gong customers export call transcripts optimized for AI analysis in ChatGPT, Claude, and other LLMs. Also includes an AI-powered research pipeline for finding extraction and synthesis across selected calls.
 
@@ -26,7 +26,7 @@ Web app that helps Gong customers export call transcripts optimized for AI analy
 - **Rate limiting**: 350 ms delay between paginated/batched Gong API requests in all proxy routes. Exponential backoff with up to 5 retries.
 - **SessionStorage key**: `gongwizard_session` holds `authHeader`, `users`, `trackers`, `workspaces`, `internalDomains`, `baseUrl`. Cleared when tab closes.
 - **LocalStorage key**: `gongwizard_filters` persists numeric/boolean filter state (duration range, talk ratio range, excludeInternal, minExternalSpeakers) across page reloads.
-- **AI research pipeline**: `AnalyzePanel` runs a four-stage pipeline — (1) score calls for relevance via Gemini Flash-Lite, (2) surgical transcript extraction reducing full transcripts to dense evidence, (3) finding extraction via Gemini 2.5 Pro, (4) synthesis + follow-up Q&A. All via `/api/analyze/*` routes. Credentials: `GEMINI_API_KEY` server-side only.
+- **AI research pipeline**: `AnalyzePanel` runs a four-stage pipeline — (1) score calls for relevance via `gemini-2.5-flash-lite`, (2) surgical transcript extraction reducing full transcripts to dense evidence, (3) finding extraction via `gemini-2.5-pro`, (4) synthesis + follow-up Q&A. All via `/api/analyze/*` routes. Credentials: `GEMINI_API_KEY` server-side only.
 - **Transcript surgery**: `src/lib/transcript-surgery.ts` filters utterances to relevant sections, strips greetings/closings (first/last 60s, <8 words), enriches external utterances with context, flags long internal monologues for AI-assisted condensing.
 - **Tracker alignment**: Four-step algorithm ported from GongWizard v2 — exact containment → ±3s fallback → speaker preference → closest midpoint.
 
@@ -40,7 +40,7 @@ Web app that helps Gong customers export call transcripts optimized for AI analy
 | Styling | Tailwind CSS | ^4 | Utility-first CSS; CSS variable theming |
 | Styling | tw-animate-css | ^1.4.0 | Animation utilities |
 | Component Library | shadcn/ui | ^3.8.5 (dev CLI) | Component scaffolding |
-| Component Primitives | radix-ui | ^1.4.3 | Accessible headless UI (Checkbox, Tabs, Slider, ScrollArea, Separator, Label) |
+| Component Primitives | radix-ui | ^1.4.3 | Accessible headless UI (Checkbox, Tabs, Slider, ScrollArea, Separator, Label, Dialog, Popover) |
 | Style Utilities | class-variance-authority | ^0.7.1 | Variant-based className composition |
 | Style Utilities | clsx | ^2.1.1 | Conditional className joining |
 | Style Utilities | tailwind-merge | ^3.5.0 | Tailwind class conflict resolution in `cn()` |
@@ -48,7 +48,7 @@ Web app that helps Gong customers export call transcripts optimized for AI analy
 | Command Menu | cmdk | ^1.1.1 | Command palette primitive |
 | Date Picker | react-day-picker | ^9.14.0 | Calendar/date range picker |
 | Date Utilities | date-fns | ^4.1.0 | Date formatting in export filenames |
-| AI Provider | @google/genai | ^1.43.0 | Gemini Flash-Lite (scoring, truncation) and Gemini 2.5 Pro (analysis, synthesis, follow-up) |
+| AI Provider | @google/genai | ^1.43.0 | `gemini-2.5-flash-lite` (scoring, truncation) and `gemini-2.5-pro` (analysis, synthesis, follow-up) |
 | OpenAI SDK | openai | ^6.25.0 | In package.json; not used in current route handlers |
 | ZIP Export | client-zip | ^2.5.0 | Browser-side ZIP creation for bulk transcript exports |
 | Testing | @playwright/test | ^1.58.2 | End-to-end smoke tests |
@@ -80,24 +80,24 @@ Stateless — no database, credentials in sessionStorage only.
 
 ### AI Analysis API Routes
 
-- `src/app/api/analyze/score/route.ts` — Relevance scoring (Gemini Flash-Lite, scores 0–10 per call)
-- `src/app/api/analyze/process/route.ts` — Smart truncation of long internal rep monologues (Flash-Lite)
-- `src/app/api/analyze/run/route.ts` — Single-call finding extraction (Gemini 2.5 Pro; `maxDuration = 60`)
-- `src/app/api/analyze/batch-run/route.ts` — Multi-call finding extraction (Gemini 2.5 Pro; `maxDuration = 60`)
-- `src/app/api/analyze/synthesize/route.ts` — Cross-call synthesis (Gemini 2.5 Pro; `maxDuration = 60`)
-- `src/app/api/analyze/followup/route.ts` — Follow-up Q&A against cached evidence (Gemini 2.5 Pro; `maxDuration = 60`)
+- `src/app/api/analyze/score/route.ts` — Relevance scoring (`gemini-2.5-flash-lite`, scores 0–10 per call)
+- `src/app/api/analyze/process/route.ts` — Smart truncation of long internal rep monologues (`gemini-2.5-flash-lite`)
+- `src/app/api/analyze/run/route.ts` — Single-call finding extraction (`gemini-2.5-pro`; `maxDuration = 60`)
+- `src/app/api/analyze/batch-run/route.ts` — Multi-call finding extraction (`gemini-2.5-pro`; `maxDuration = 60`)
+- `src/app/api/analyze/synthesize/route.ts` — Cross-call synthesis (`gemini-2.5-pro`; `maxDuration = 60`)
+- `src/app/api/analyze/followup/route.ts` — Follow-up Q&A against cached evidence (`gemini-2.5-pro`; `maxDuration = 60`)
 
 ### Components & Hooks
 
 - `src/components/analyze-panel.tsx` — AI research panel; orchestrates four-stage analysis pipeline
 - `src/hooks/useCallExport.ts` — All export logic: fetch transcripts, assemble CallForExport, dispatch to formatter
 - `src/hooks/useFilterState.ts` — Filter state management; persists to localStorage, keeps text/multi-select in React state
-- `src/components/ui/` — 10 shadcn/ui primitives: Badge, Button, Card, Checkbox, Input, Label, ScrollArea, Separator, Slider, Tabs
+- `src/components/ui/` — 15 shadcn/ui primitives: Badge, Button, Calendar, Card, Checkbox, Command, Dialog, Input, Label, MultiSelect, Popover, ScrollArea, Separator, Slider, Tabs
 
 ### Lib Modules
 
 - `src/lib/gong-api.ts` — Shared Gong API utilities: `GongApiError`, `makeGongFetch`, `handleGongError`, rate limit + batch constants, exponential backoff
-- `src/lib/ai-providers.ts` — Gemini abstraction: `cheapCompleteJSON` (Flash-Lite) and `smartCompleteJSON`/`smartStream` (2.5 Pro)
+- `src/lib/ai-providers.ts` — Gemini abstraction: `cheapCompleteJSON` (`gemini-2.5-flash-lite`) and `smartCompleteJSON`/`smartStream` (`gemini-2.5-pro`)
 - `src/lib/transcript-formatter.ts` — All export rendering: `buildMarkdown`, `buildXML`, `buildJSONL`, `buildCSVSummary`, `buildUtteranceCSV`, `buildExportContent`
 - `src/lib/transcript-surgery.ts` — Surgical transcript extraction for AI analysis: `performSurgery`, `formatExcerptsForAnalysis`, `buildSmartTruncationPrompt`
 - `src/lib/tracker-alignment.ts` — Aligns tracker occurrences to utterances; `buildUtterances`, `alignTrackersToUtterances`
@@ -114,7 +114,7 @@ Stateless — no database, credentials in sessionStorage only.
 | Name | Purpose | Required |
 |---|---|---|
 | `SITE_PASSWORD` | Password checked on gate page to issue `gw-auth` session cookie | Required |
-| `GEMINI_API_KEY` | API key for Google Gemini (Flash-Lite and 2.5 Pro) | Required for AI analysis features |
+| `GEMINI_API_KEY` | API key for Google Gemini (`gemini-2.5-flash-lite` and `gemini-2.5-pro`) | Required for AI analysis features |
 
 Gong API credentials are user-supplied at runtime, passed via `X-Gong-Auth` header, and held only in browser `sessionStorage` under `gongwizard_session`. Never persisted server-side.
 
@@ -123,6 +123,7 @@ Gong API credentials are user-supplied at runtime, passed via `X-Gong-Auth` head
 ```bash
 npm run dev     # Dev server (Turbopack — enabled by default in Next.js 16)
 npm run build   # Production build
+npm run start   # Start production server
 npm run lint    # ESLint
 ```
 

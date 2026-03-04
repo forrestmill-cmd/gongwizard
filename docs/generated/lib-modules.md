@@ -1,37 +1,87 @@
-# GongWizard — Lib Modules Reference
+# GongWizard — Library Modules Reference
 
-_Auto-generated from source. Organized by subdirectory._
+Generated from source: `src/lib/`, `src/hooks/`, `src/types/`
 
 ---
 
 ## Table of Contents
 
-- [src/lib/](#srclibmodules)
-  - [gong-api.ts](#gong-apits)
-  - [ai-providers.ts](#ai-providersts)
-  - [transcript-formatter.ts](#transcript-formatterts)
-  - [transcript-surgery.ts](#transcript-surgeryts)
-  - [tracker-alignment.ts](#tracker-alignmentts)
-  - [filters.ts](#filtersts)
-  - [session.ts](#sessionts)
-  - [format-utils.ts](#format-utilsts)
-  - [token-utils.ts](#token-utilsts)
-  - [browser-utils.ts](#browser-utilsts)
-  - [utils.ts](#utilsts)
-- [src/types/](#srctypes)
-  - [gong.ts](#gongts)
-- [Dependency Graph](#dependency-graph)
-- [Constants and Configuration](#constants-and-configuration)
+1. [Module Overview](#1-module-overview)
+   - [src/lib/ai-providers.ts](#srclibai-providersts)
+   - [src/lib/gong-api.ts](#srclibgong-apits)
+   - [src/lib/transcript-formatter.ts](#srclibtranscript-formatterts)
+   - [src/lib/transcript-surgery.ts](#srclibtranscript-surgeryts)
+   - [src/lib/tracker-alignment.ts](#srclibtracker-alignmentts)
+   - [src/lib/filters.ts](#srclibfiltersts)
+   - [src/lib/session.ts](#srclibsessionts)
+   - [src/lib/format-utils.ts](#srclibformat-utilsts)
+   - [src/lib/token-utils.ts](#srclibtoken-utilsts)
+   - [src/lib/browser-utils.ts](#srclibbrowser-utilsts)
+   - [src/lib/utils.ts](#srclibutils)
+   - [src/hooks/useCallExport.ts](#srchooksusecallexportts)
+   - [src/hooks/useFilterState.ts](#srchooksusefilterstatets)
+   - [src/types/gong.ts](#srctypesgongts)
+2. [Dependency Graph](#2-dependency-graph)
+3. [Constants and Configuration](#3-constants-and-configuration)
 
 ---
 
-## src/lib/ Modules
+## 1. Module Overview
 
-### gong-api.ts
+### `src/lib/ai-providers.ts`
 
-**Path:** `src/lib/gong-api.ts`
+**Purpose:** Abstracts all Gemini API access into a cheap tier (Gemini 2.5 Flash-Lite for scoring/truncation) and a smart tier (Gemini 2.5 Pro for analysis, synthesis, follow-up). Manages a lazily-initialized singleton `GoogleGenAI` client.
 
-**Purpose:** Shared Gong API utilities — typed error class, authenticated fetch factory with exponential backoff and rate-limit retry, and centralized error handler for Next.js route handlers.
+**Key exports:**
+
+```typescript
+function cheapComplete(prompt: string, options?: {
+  temperature?: number;
+  maxTokens?: number;
+  jsonMode?: boolean;
+}): Promise<string>
+
+function cheapCompleteJSON<T = unknown>(prompt: string, options?: {
+  temperature?: number;
+  maxTokens?: number;
+}): Promise<T>
+
+function smartComplete(prompt: string, options?: {
+  temperature?: number;
+  maxTokens?: number;
+  systemPrompt?: string;
+  jsonMode?: boolean;
+}): Promise<string>
+
+function smartCompleteJSON<T = unknown>(prompt: string, options?: {
+  temperature?: number;
+  maxTokens?: number;
+  systemPrompt?: string;
+}): Promise<T>
+
+function smartStream(prompt: string, options?: {
+  temperature?: number;
+  maxTokens?: number;
+  systemPrompt?: string;
+}): AsyncGenerator<string>
+```
+
+**External dependencies:** `@google/genai` (GoogleGenAI)
+
+**Internal dependencies:** None
+
+**Notes:**
+- `cheapComplete` / `cheapCompleteJSON` use `gemini-2.5-flash-lite` (fast, low cost)
+- `smartComplete` / `smartCompleteJSON` / `smartStream` use `gemini-2.5-pro` (full quality)
+- `smartStream` uses `generateContentStream` for incremental output
+- All functions throw if the API returns an empty response or invalid JSON
+- `GEMINI_API_KEY` env var required; throws if missing on first call
+
+---
+
+### `src/lib/gong-api.ts`
+
+**Purpose:** Shared Gong API client utilities — HTTP fetch factory with exponential backoff and retry, typed error class, rate-limit constants, and a standardized error handler for Route Handlers.
 
 **Key exports:**
 
@@ -44,10 +94,10 @@ class GongApiError extends Error {
 
 function sleep(ms: number): Promise<void>
 
-function makeGongFetch(
-  baseUrl: string,
-  authHeader: string
-): (endpoint: string, options?: RequestInit) => Promise<any>
+function makeGongFetch(baseUrl: string, authHeader: string): (
+  endpoint: string,
+  options?: RequestInit
+) => Promise<any>
 
 function handleGongError(error: unknown): NextResponse
 
@@ -59,90 +109,49 @@ const MAX_RETRIES: number           // 5
 
 **External dependencies:** `next/server` (NextResponse)
 
-**Internal dependencies:** none
+**Internal dependencies:** None
 
-**Notes:** `makeGongFetch` returns a closure that handles 401/403 (throws immediately, no retry), 429 (respects `Retry-After` header or exponential backoff), and all other errors (exponential backoff up to 30s). Auth is HTTP Basic injected via the `Authorization` header on every request.
+**Notes:**
+- `makeGongFetch` returns a closure that injects `Authorization: Basic <authHeader>` on every request
+- 401/403/404 responses are thrown immediately (no retry) — they indicate credential or permission issues
+- 429 responses respect the `Retry-After` header if present; otherwise uses exponential backoff
+- Backoff formula: `Math.min(2^attempt * 2, 30) * 1000` ms, capped at 30 seconds
+- `handleGongError` converts `GongApiError` to appropriate HTTP status; all other errors map to 500
 
 ---
 
-### ai-providers.ts
+### `src/lib/transcript-formatter.ts`
 
-**Path:** `src/lib/ai-providers.ts`
-
-**Purpose:** Two-tier Gemini abstraction — cheap tier (Flash-Lite, for scoring and truncation) and smart tier (2.5 Pro, for finding extraction and synthesis). Exposes both JSON and streaming variants.
+**Purpose:** All export rendering — converts assembled `CallForExport` objects into Markdown, XML, JSONL, summary CSV, and utterance-level CSV formats. Also provides the `groupTranscriptTurns` function that groups raw sentences into speaker turns.
 
 **Key exports:**
 
 ```typescript
-function cheapComplete(
-  prompt: string,
-  options?: { temperature?: number; maxTokens?: number; jsonMode?: boolean }
-): Promise<string>
-
-function cheapCompleteJSON<T = unknown>(
-  prompt: string,
-  options?: { temperature?: number; maxTokens?: number }
-): Promise<T>
-
-function smartComplete(
-  prompt: string,
-  options?: { temperature?: number; maxTokens?: number; systemPrompt?: string; jsonMode?: boolean }
-): Promise<string>
-
-function smartCompleteJSON<T = unknown>(
-  prompt: string,
-  options?: { temperature?: number; maxTokens?: number; systemPrompt?: string }
-): Promise<T>
-
-async function* smartStream(
-  prompt: string,
-  options?: { temperature?: number; maxTokens?: number; systemPrompt?: string }
-): AsyncGenerator<string>
-```
-
-**External dependencies:** `@google/genai` (GoogleGenAI)
-
-**Internal dependencies:** none
-
-**Notes:** Gemini client is lazily initialized as a module-level singleton (`_gemini`). Reads `GEMINI_API_KEY` from `process.env` at first call. Flash-Lite default `maxOutputTokens` is 1024; 2.5 Pro default is 8192. Both JSON variants use `responseMimeType: 'application/json'` via the Gemini SDK, then `JSON.parse` the result.
-
----
-
-### transcript-formatter.ts
-
-**Path:** `src/lib/transcript-formatter.ts`
-
-**Purpose:** All export rendering — assembles `CallForExport` objects into Markdown, XML, JSONL, summary CSV, and utterance-level CSV strings. The main output module consumed by `useCallExport`.
-
-**Key exports:**
-
-```typescript
+// Types
 interface Speaker {
-  speakerId: string; name: string; firstName: string; isInternal: boolean; title?: string
+  speakerId: string; name: string; firstName: string;
+  isInternal: boolean; title?: string;
 }
-
-interface TranscriptSentence {
-  speakerId: string; text: string; start: number
-}
-
+interface TranscriptSentence { speakerId: string; text: string; start: number }
 interface FormattedTurn {
-  speakerId: string; firstName: string; isInternal: boolean; timestamp: string; text: string
+  speakerId: string; firstName: string; isInternal: boolean;
+  timestamp: string; text: string;
 }
-
 interface CallForExport {
-  id: string; title: string; date: string; duration: number; accountName: string
-  speakers: Speaker[]; brief: string; turns: FormattedTurn[]; interactionStats?: any
+  id: string; title: string; date: string; duration: number;
+  accountName: string; speakers: Speaker[]; brief: string;
+  turns: FormattedTurn[]; interactionStats?: any;
   rawMonologues?: Array<{
     speakerId: string;
-    sentences?: Array<{ text: string; start: number; end?: number }>
-  }>
+    sentences?: Array<{ text: string; start: number; end?: number }>;
+  }>;
 }
-
 interface ExportOptions {
-  condenseMonologues: boolean; includeMetadata: boolean
-  includeAIBrief: boolean; includeInteractionStats: boolean
+  condenseMonologues: boolean; includeMetadata: boolean;
+  includeAIBrief: boolean; includeInteractionStats: boolean;
 }
 
+// Functions
 function groupTranscriptTurns(
   sentences: TranscriptSentence[],
   speakerMap: Map<string, Speaker>
@@ -164,46 +173,48 @@ function buildExportContent(
 ): { content: string; extension: string; mimeType: string }
 ```
 
-**External dependencies:** none
+**External dependencies:** None (pure computation)
 
 **Internal dependencies:**
-
-- `./token-utils` — `estimateTokens` (token count in Markdown header)
+- `./token-utils` — `estimateTokens` (used in Markdown header)
 - `./format-utils` — `formatDuration`, `formatTimestamp`
 - `./tracker-alignment` — `buildUtterances`, `alignTrackersToUtterances`, `extractTrackerOccurrences`, `Utterance`
 - `./transcript-surgery` — `findNearestOutlineItem`, `OutlineSection`
 
-**Notes:** `buildUtteranceCSV` is the most complex export — builds utterances from raw monologues, runs full tracker alignment, and looks up the nearest Gong AI outline item per utterance. Only external speaker turns are emitted as primary rows; internal turns appear only as `REFERENCE_ONLY_CONTEXT`. `truncateLongInternalTurns` fires at `INTERNAL_WORD_THRESHOLD = 150` words, keeping first 2 + last 2 sentences with `[...]` separator. External speaker text is rendered in ALL CAPS across Markdown, XML, and JSONL formats.
+**Notes:**
+- External speaker text is rendered in ALL CAPS in Markdown, XML, and JSONL formats for LLM signal
+- `truncateLongInternalTurns`: internal turns with 150+ words are condensed to first 2 + last 2 sentences with `[...]`
+- `buildUtteranceCSV` skips calls without `rawMonologues`; outputs one row per external utterance with columns: Call ID, Call Date, Account Name, Speaker Name, Speaker Title, Outline Section, Tracker Hits, PRIMARY\_ANALYSIS\_TEXT, REFERENCE\_ONLY\_CONTEXT
+- `buildExportContent` is the single dispatch entry point; used by `useCallExport`
 
 ---
 
-### transcript-surgery.ts
+### `src/lib/transcript-surgery.ts`
 
-**Path:** `src/lib/transcript-surgery.ts`
-
-**Purpose:** Surgical transcript extraction for the AI research pipeline — reduces ~16K tokens per call to ~2–3K of analysis-ready evidence by filtering to relevant outline sections, stripping filler and greetings, enriching external utterances with preceding context, and flagging long internal monologues for further AI condensing.
+**Purpose:** Surgical extraction of relevant transcript segments for AI analysis — reduces a ~16K token raw transcript to ~2–3K of high-signal evidence. Filters out filler, greetings/closings, short utterances, and off-topic sections; enriches external utterances with preceding context and Gong AI outline item descriptions.
 
 **Key exports:**
 
 ```typescript
+// Types
 interface OutlineSection {
-  name: string; startTimeMs: number; durationMs: number
-  items?: Array<{ text: string; startTimeMs: number; durationMs: number }>
+  name: string; startTimeMs: number; durationMs: number;
+  items?: Array<{ text: string; startTimeMs: number; durationMs: number }>;
 }
-
 interface SurgicalExcerpt {
-  speakerId: string; text: string; timestampMs: number; timestampFormatted: string
-  isInternal: boolean; trackers: string[]; sectionName?: string
-  needsSmartTruncation: boolean; contextBefore?: string
-  outlineItemText?: string; speakerName?: string; speakerTitle?: string
+  speakerId: string; text: string; timestampMs: number;
+  timestampFormatted: string; isInternal: boolean; trackers: string[];
+  sectionName?: string; needsSmartTruncation: boolean;
+  contextBefore?: string; outlineItemText?: string;
+  speakerName?: string; speakerTitle?: string;
 }
-
 interface SurgeryResult {
-  callId: string; excerpts: SurgicalExcerpt[]; sectionsUsed: string[]
-  originalUtteranceCount: number; extractedUtteranceCount: number
-  longInternalMonologues: Array<{ index: number; text: string; wordCount: number }>
+  callId: string; excerpts: SurgicalExcerpt[]; sectionsUsed: string[];
+  originalUtteranceCount: number; extractedUtteranceCount: number;
+  longInternalMonologues: Array<{ index: number; text: string; wordCount: number }>;
 }
 
+// Functions
 function buildChapterWindows(
   outline: OutlineSection[],
   relevantSections: string[]
@@ -242,38 +253,41 @@ function formatExcerptsForAnalysis(
 ): string
 ```
 
-**External dependencies:** none
+**External dependencies:** None (pure computation)
 
 **Internal dependencies:**
+- `./tracker-alignment` — `Utterance` type
 
-- `./tracker-alignment` — `Utterance` (type import only)
-
-**Notes:** `performSurgery` applies five sequential gates per utterance: filler regex check (`FILLER_PATTERNS`), greeting/closing window (`GREETING_CLOSING_WINDOW_MS = 60_000` ms), minimum 8-word count, relevant section window containment, and tracker hit presence — the utterance must pass the section OR tracker gate to be included. Internal monologues over 60 words are flagged `needsSmartTruncation = true` and their indices returned in `longInternalMonologues` for the `/api/analyze/process` route. `findNearestOutlineItem` is also exported for use by `transcript-formatter.ts`.
+**Notes:**
+- Utterances filtered out by `performSurgery`: filler (matches `FILLER_PATTERNS`), greeting/closing (first/last 60s AND < 15 words), under 8 words, not in a relevant outline section AND no tracker match
+- `needsSmartTruncation` is set for internal monologues > 60 words — the caller sends those to `/api/analyze/process` (Gemini Flash-Lite) and patches the results back into `excerpts[index].text`
+- Context enrichment uses reach-back: if the preceding utterance is 10 words or fewer, reaches back one more level (max depth 2)
+- `findNearestOutlineItem` uses a ±30s window; returns the closest item text within that window
+- `formatExcerptsForAnalysis` groups excerpts by section, prints Gong AI outline item annotations when they change, and labels each turn INTERNAL/EXTERNAL with resolved name and title
 
 ---
 
-### tracker-alignment.ts
+### `src/lib/tracker-alignment.ts`
 
-**Path:** `src/lib/tracker-alignment.ts`
-
-**Purpose:** Aligns Gong tracker occurrence timestamps to transcript utterances using a four-step algorithm ported from GongWizard V2 (`app.py` lines 650–730). Mutates utterance objects in place to attach tracker names.
+**Purpose:** Aligns Gong tracker keyword occurrences (which carry timestamps but no utterance pointer) to specific transcript utterances using a four-step algorithm ported from GongWizard v2.
 
 **Key exports:**
 
 ```typescript
 interface TrackerOccurrence {
-  trackerName: string; phrase?: string; startTimeMs: number; speakerId?: string
+  trackerName: string; phrase?: string;
+  startTimeMs: number; speakerId?: string;
 }
-
 interface Utterance {
-  speakerId: string; text: string; startTimeMs: number; endTimeMs: number
-  midTimeMs: number; trackers: string[]; isInternal: boolean
+  speakerId: string; text: string; startTimeMs: number;
+  endTimeMs: number; midTimeMs: number;
+  trackers: string[]; isInternal: boolean;
 }
 
 function buildUtterances(
   monologues: Array<{
     speakerId: string;
-    sentences?: Array<{ text: string; start: number; end?: number }>
+    sentences?: Array<{ text: string; start: number; end?: number }>;
   }>,
   speakerClassifier: (speakerId: string) => boolean
 ): Utterance[]
@@ -286,33 +300,39 @@ function alignTrackersToUtterances(
 function extractTrackerOccurrences(
   trackers: Array<{
     name: string;
-    occurrences?: Array<{ startTimeMs: number; speakerId?: string; phrase?: string }>
+    occurrences?: Array<{ startTimeMs: number; speakerId?: string; phrase?: string }>;
   }>
 ): TrackerOccurrence[]
 ```
 
-**External dependencies:** none
+**External dependencies:** None
 
-**Internal dependencies:** none
+**Internal dependencies:** None
 
-**Notes:** `buildUtterances` converts Gong's sentence-level `start`/`end` timestamps from seconds to milliseconds. The four alignment steps are: (1) exact containment — tracker timestamp within `[startTimeMs, endTimeMs]`; (2) ±`WINDOW_MS` (3000ms) fallback expansion; (3) speaker preference narrowing when `TrackerOccurrence.speakerId` is set; (4) closest midpoint. Utterances with `startTimeMs === 0` are excluded from matching (treated as missing, not start-of-call).
+**Notes:**
+- `buildUtterances` converts Gong sentence arrays to utterance objects; Gong `sentences.start` values are in **seconds** and are multiplied by 1000 to produce milliseconds
+- Alignment algorithm (four steps applied in order):
+  1. Exact containment: `startTimeMs <= ts <= endTimeMs`
+  2. ±3s fallback window (`WINDOW_MS = 3000`)
+  3. Speaker preference: narrows candidates to utterances matching `speakerId` if present
+  4. Closest midpoint: sorts remaining candidates by `|ts - midTimeMs|`, assigns to closest
+- `alignTrackersToUtterances` mutates `utterance.trackers` in place
+- Utterances with `startTimeMs === 0` are excluded from alignment (treated as missing timestamp, not start of call)
 
 ---
 
-### filters.ts
+### `src/lib/filters.ts`
 
-**Path:** `src/lib/filters.ts`
-
-**Purpose:** Pure, stateless filter predicates for the call list page. Each function tests one `FilterableCall` against a single criterion. Also provides count-aggregation helpers for populating tracker and topic filter chips.
+**Purpose:** Pure, stateless filter predicates for the call list. Each function takes a `FilterableCall` and returns a boolean. Also provides two aggregation helpers for computing tracker and topic display counts across the full call list.
 
 **Key exports:**
 
 ```typescript
 interface FilterableCall {
-  title: string; brief?: string; duration: number; topics?: string[]
-  trackers?: string[]; parties?: any[]; externalSpeakerCount: number
-  talkRatio?: number; keyPoints?: string[]; actionItems?: string[]
-  outline?: Array<{ name: string; items?: Array<{ text: string }> }>
+  title: string; brief?: string; duration: number; topics?: string[];
+  trackers?: string[]; parties?: any[]; externalSpeakerCount: number;
+  talkRatio?: number; keyPoints?: string[]; actionItems?: string[];
+  outline?: Array<{ name: string; items?: Array<{ text: string }> }>;
 }
 
 function matchesTextSearch(call: FilterableCall, query: string): boolean
@@ -324,23 +344,30 @@ function matchesParticipantName(call: FilterableCall, query: string): boolean
 function matchesMinExternalSpeakers(call: FilterableCall, min: number): boolean
 function matchesAiContentSearch(call: FilterableCall, query: string): boolean
 
-function computeTrackerCounts(calls: FilterableCall[], allTrackers: string[]): Record<string, number>
+function computeTrackerCounts(
+  calls: FilterableCall[],
+  allTrackers: string[]
+): Record<string, number>
+
 function computeTopicCounts(calls: FilterableCall[]): Record<string, number>
 ```
 
-**External dependencies:** none
+**External dependencies:** None
 
-**Internal dependencies:** none
+**Internal dependencies:** None
 
-**Notes:** `matchesAiContentSearch` searches `brief`, `keyPoints`, `actionItems`, and all outline section names + item texts — not the raw transcript. `matchesTalkRatioRange` converts Gong's float (0–1) to integer percentage before comparison. Calls with `talkRatio === undefined` pass the talk ratio filter by default (return `true`). Tracker and topic filters are OR-logic across the active set.
+**Notes:**
+- `matchesTextSearch` searches only `title` and `brief`
+- `matchesAiContentSearch` searches `brief`, `keyPoints`, `actionItems`, and all outline section names plus item texts
+- `matchesTalkRatioRange` converts `talkRatio` (0–1 fraction) to integer percent before comparing
+- `matchesTrackers` / `matchesTopics` use OR logic — a call passes if it has ANY of the active filter values
+- All predicates return `true` when their filter is empty/zero (pass-through)
 
 ---
 
-### session.ts
+### `src/lib/session.ts`
 
-**Path:** `src/lib/session.ts`
-
-**Purpose:** Thin `sessionStorage` wrapper for reading and writing the Gong session object. Session is automatically cleared when the browser tab closes (browser `sessionStorage` lifecycle).
+**Purpose:** Thin wrapper for reading and writing the `gongwizard_session` key in `sessionStorage`. The session holds Gong credentials, user list, tracker list, workspace list, internal domains, and base URL for the current browser tab.
 
 **Key exports:**
 
@@ -349,45 +376,51 @@ function saveSession(data: Record<string, unknown>): void
 function getSession(): Record<string, unknown> | null
 ```
 
-**External dependencies:** browser `sessionStorage` API
+**External dependencies:** Browser `sessionStorage` API
 
-**Internal dependencies:** none
+**Internal dependencies:** None
+
+**Notes:**
+- Storage key: `gongwizard_session` (module-level constant)
+- `getSession` swallows parse errors and returns `null` on any failure
+- Session is cleared automatically when the browser tab closes (sessionStorage lifetime)
+- See `GongSession` in `src/types/gong.ts` for the expected shape of the stored object
 
 ---
 
-### format-utils.ts
+### `src/lib/format-utils.ts`
 
-**Path:** `src/lib/format-utils.ts`
-
-**Purpose:** Shared display formatting helpers — duration strings, MM:SS timestamps, internal-party classification by email domain, and first-sentence truncation.
+**Purpose:** Shared presentation utilities for formatting call durations and timestamps. Also contains `isInternalParty`, the core speaker-classification logic based on Gong affiliation field and email domain matching.
 
 **Key exports:**
 
 ```typescript
 function formatDuration(seconds: number): string
-// Returns "Xh Ym" / "Xm Ys" / "Xs"
+// Examples: 3661 → "1h 1m", 90 → "1m 30s", 45 → "45s"
 
 function formatTimestamp(ms: number): string
-// Input is milliseconds; returns "M:SS"
+// Examples: 90500 → "1:30", 3600000 → "60:00"
 
 function isInternalParty(party: any, internalDomains: string[]): boolean
 // Returns true if party.affiliation === 'Internal' OR email domain is in internalDomains
 
 function truncateToFirstSentence(text: string, maxChars?: number): string
-// Default maxChars = 120; appends '…' if truncated
+// maxChars default: 120. Truncates at first '. '; if none, truncates at maxChars with '...'
 ```
 
-**External dependencies:** none
+**External dependencies:** None
 
-**Internal dependencies:** none
+**Internal dependencies:** None
+
+**Notes:**
+- `isInternalParty` checks `party.affiliation === 'Internal'` first (Gong-provided flag), then falls back to email domain matching against `internalDomains` derived from `/v2/users`
+- `formatTimestamp` input is **milliseconds**; `formatDuration` input is **seconds**
 
 ---
 
-### token-utils.ts
+### `src/lib/token-utils.ts`
 
-**Path:** `src/lib/token-utils.ts`
-
-**Purpose:** Client-side token estimation and context window labeling for the export size guidance display in the UI.
+**Purpose:** Token count estimation and UI labeling for AI context window guidance shown to users on the export panel.
 
 **Key exports:**
 
@@ -396,23 +429,25 @@ function estimateTokens(text: string): number
 // Approximation: Math.ceil(text.length / 4)
 
 function contextLabel(tokens: number): string
-// Returns human-readable label: "Small", "Medium", "Large", "Very large", or "Exceeds typical"
+// Returns human-readable tier label based on token count thresholds
 
 function contextColor(tokens: number): string
-// Returns Tailwind class: green (<32K), yellow (32K–128K), red (≥128K)
+// Returns Tailwind text color class: green (<32K), yellow (<128K), red (>=128K)
 ```
 
-**External dependencies:** none
+**External dependencies:** None
 
-**Internal dependencies:** none
+**Internal dependencies:** None
+
+**Notes:**
+- `contextLabel` thresholds: < 8K = "Small (fits most models)", < 16K = "Medium (GPT-4, Claude Haiku)", < 128K = "Large (GPT-4 Turbo, Claude Opus)", < 200K = "Very large (Claude Sonnet, Gemini)", >= 200K = "Exceeds typical context windows"
+- `contextColor` color thresholds: < 32K = green, < 128K = yellow, >= 128K = red
 
 ---
 
-### browser-utils.ts
+### `src/lib/browser-utils.ts`
 
-**Path:** `src/lib/browser-utils.ts`
-
-**Purpose:** Browser-side file download utility. Creates a Blob, generates an object URL, clicks an ephemeral anchor element, then immediately revokes the URL.
+**Purpose:** Browser-only file download helper using the ephemeral anchor + object URL pattern.
 
 **Key exports:**
 
@@ -420,17 +455,19 @@ function contextColor(tokens: number): string
 function downloadFile(content: string, filename: string, mimeType: string): void
 ```
 
-**External dependencies:** browser DOM / `URL.createObjectURL` API
+**External dependencies:** Browser DOM (`Blob`, `URL.createObjectURL`, `URL.revokeObjectURL`)
 
-**Internal dependencies:** none
+**Internal dependencies:** None
+
+**Notes:**
+- Creates a `Blob`, generates an object URL, programmatically clicks an `<a>` element, then immediately revokes the URL to free memory
+- Used by `useCallExport` for single-file downloads; ZIP exports use `client-zip`'s `downloadZip` directly in the hook
 
 ---
 
-### utils.ts
+### `src/lib/utils.ts`
 
-**Path:** `src/lib/utils.ts`
-
-**Purpose:** shadcn/ui standard `cn()` helper — merges Tailwind classes with conflict resolution.
+**Purpose:** Standard shadcn/ui `cn()` utility for merging Tailwind class strings with conflict resolution.
 
 **Key exports:**
 
@@ -440,47 +477,119 @@ function cn(...inputs: ClassValue[]): string
 
 **External dependencies:** `clsx`, `tailwind-merge`
 
-**Internal dependencies:** none
+**Internal dependencies:** None
 
 ---
 
-## src/types/
+### `src/hooks/useCallExport.ts`
 
-### gong.ts
+**Purpose:** Encapsulates all transcript export logic — fetches transcripts from the proxy API, assembles `CallForExport` objects with speaker classification, dispatches to `buildExportContent`, and exposes handlers for single-file download, clipboard copy, and ZIP bundle export.
 
-**Path:** `src/types/gong.ts`
+**Key exports:**
 
-**Purpose:** All shared TypeScript interfaces used across API routes, lib modules, hooks, and components. Single source of truth for Gong data shapes and analysis result types.
+```typescript
+interface UseCallExportParams {
+  selectedIds: Set<string>;
+  session: GongSession;
+  calls: GongCall[];
+  exportFormat: 'markdown' | 'xml' | 'jsonl' | 'csv' | 'utterance-csv';
+  exportOpts: ExportOptions;
+}
+
+function useCallExport(params: UseCallExportParams): {
+  exporting: boolean;
+  copied: boolean;
+  handleExport: () => Promise<void>;
+  handleCopy: () => Promise<void>;
+  handleZipExport: () => Promise<void>;
+}
+```
+
+**External dependencies:** `client-zip` (downloadZip), `date-fns` (format)
+
+**Internal dependencies:**
+- `@/lib/format-utils` — `isInternalParty`
+- `@/lib/browser-utils` — `downloadFile`
+- `@/lib/transcript-formatter` — `groupTranscriptTurns`, `buildExportContent`, `Speaker`, `TranscriptSentence`, `CallForExport`, `ExportOptions`
+- `@/types/gong` — `GongSession`, `GongCall`
+
+**Notes:**
+- `fetchTranscriptsForSelected` calls `POST /api/gong/transcripts` with `X-Gong-Auth` header; assembles `Speaker` objects from `callMeta.parties` using `isInternalParty`
+- Sentences are flattened from all monologues, sorted ascending by `start` time, then passed to `groupTranscriptTurns`
+- `handleZipExport` generates one file per call in a `calls/` subdirectory plus a `manifest.json` at the archive root
+- ZIP filenames are sanitized: lowercased, non-alphanumeric chars replaced with `-`, truncated to 50 chars
+
+---
+
+### `src/hooks/useFilterState.ts`
+
+**Purpose:** Manages the complete filter state for the calls page — combines persisted numeric/boolean filters (written to `localStorage`) with session-only text and multi-select state. Provides stable setter callbacks with automatic write-through persistence on every change.
+
+**Key exports:**
+
+```typescript
+function useFilterState(): {
+  searchText: string; setSearchText: (v: string) => void;
+  participantSearch: string; setParticipantSearch: (v: string) => void;
+  aiContentSearch: string; setAiContentSearch: (v: string) => void;
+  excludeInternal: boolean; setExcludeInternal: (v: boolean) => void;
+  durationRange: [number, number]; setDurationRange: (v: [number, number]) => void;
+  talkRatioRange: [number, number]; setTalkRatioRange: (v: [number, number]) => void;
+  minExternalSpeakers: number; setMinExternalSpeakers: (v: number) => void;
+  activeTrackers: Set<string>; toggleTracker: (name: string) => void;
+  activeTopics: Set<string>; toggleTopic: (name: string) => void;
+  resetFilters: () => void;
+}
+```
+
+**External dependencies:** Browser `localStorage` API
+
+**Internal dependencies:** None
+
+**Notes:**
+- Storage key: `gongwizard_filters`
+- Persisted fields: `excludeInternal`, `durationMin`, `durationMax`, `talkRatioMin`, `talkRatioMax`, `minExternalSpeakers`
+- Not persisted (session-only): `searchText`, `participantSearch`, `aiContentSearch`, `activeTrackers`, `activeTopics`
+- Uses a `useRef` (`currentFilters`) to hold current persisted values so `updatePersisted` can be declared with `[]` deps (stable reference) without stale closure issues
+- `resetFilters` calls raw state setters (bypassing persistence wrappers) then calls `localStorage.removeItem` directly to avoid re-persisting default values
+- Duration range defaults: `[0, 7200]` (0–2 hours); talk ratio range defaults: `[0, 100]`
+
+---
+
+### `src/types/gong.ts`
+
+**Purpose:** Single source of truth for all shared TypeScript interfaces used across API routes, components, and lib modules.
 
 **Key exports:**
 
 ```typescript
 interface GongCall {
-  id: string; title: string; started: string; duration: number; url?: string
-  direction?: string; parties: GongParty[]; topics: string[]; trackers: string[]
-  brief: string; keyPoints: string[]; actionItems: string[]; outline: OutlineSection[]
-  questions: GongQuestion[]; interactionStats: InteractionStats | null; context: any[]
-  accountName: string; accountIndustry: string; accountWebsite: string
-  internalSpeakerCount: number; externalSpeakerCount: number; talkRatio?: number
+  id: string; title: string; started: string; duration: number; url?: string;
+  direction?: string; parties: GongParty[]; topics: string[]; trackers: string[];
+  trackerData?: GongTracker[]; brief: string; keyPoints: string[];
+  actionItems: string[]; outline: OutlineSection[]; questions: GongQuestion[];
+  interactionStats: InteractionStats | null; context: any[];
+  accountName: string; accountIndustry: string; accountWebsite: string;
+  internalSpeakerCount: number; externalSpeakerCount: number; talkRatio?: number;
 }
 
 interface GongParty {
-  speakerId?: string; name?: string; title?: string; emailAddress?: string
-  affiliation?: string; userId?: string; methods?: string[]
+  speakerId?: string; name?: string; title?: string;
+  emailAddress?: string; affiliation?: string; userId?: string; methods?: string[];
 }
 
 interface GongTracker {
-  id?: string; name: string; count?: number; occurrences: TrackerOccurrence[]
+  id?: string; name: string; count?: number; occurrences: TrackerOccurrence[];
 }
 
 interface TrackerOccurrence {
-  startTime?: number    // original seconds from Gong API
-  startTimeMs: number   // converted to milliseconds by calls/route.ts
-  speakerId?: string; phrase?: string
+  startTime?: number;    // raw seconds from Gong API
+  startTimeMs: number;   // pre-converted to milliseconds by calls/route.ts
+  speakerId?: string; phrase?: string;
 }
 
 interface OutlineSection {
-  name: string; startTimeMs: number; durationMs: number; items: OutlineItem[]
+  name: string; startTimeMs: number; durationMs: number; items: OutlineItem[];
 }
 
 interface OutlineItem { text: string; startTimeMs: number; durationMs: number }
@@ -488,151 +597,157 @@ interface OutlineItem { text: string; startTimeMs: number; durationMs: number }
 interface GongQuestion { text?: string; speakerId?: string; startTime?: number }
 
 interface InteractionStats {
-  talkRatio?: number; longestMonologue?: number
-  interactivity?: number; patience?: number; questionRate?: number
+  talkRatio?: number; longestMonologue?: number; interactivity?: number;
+  patience?: number; questionRate?: number;
 }
 
 interface GongSession {
-  authHeader: string; users: GongUser[]; trackers: SessionTracker[]
-  workspaces: GongWorkspace[]; internalDomains: string[]; baseUrl: string
+  authHeader: string; users: GongUser[]; trackers: SessionTracker[];
+  workspaces: GongWorkspace[]; internalDomains: string[]; baseUrl: string;
 }
 
-interface GongUser {
-  id: string; emailAddress: string; firstName?: string; lastName?: string; title?: string
-}
-
+interface GongUser { id: string; emailAddress: string; firstName?: string; lastName?: string; title?: string }
 interface SessionTracker { id: string; name: string }
 interface GongWorkspace { id: string; name: string }
 
-interface TranscriptMonologue {
-  speakerId: string; sentences: TranscriptSentence[]
-}
-
-interface TranscriptSentence {
-  text: string; start: number; end?: number  // milliseconds
-}
+interface TranscriptMonologue { speakerId: string; sentences: TranscriptSentence[] }
+interface TranscriptSentence { text: string; start: number; end?: number }
 
 interface ScoredCall {
-  callId: string; score: number; reason: string; relevantSections: string[]
+  callId: string; score: number; reason: string; relevantSections: string[];
 }
 
 interface AnalysisFinding {
-  quote: string; timestamp: string; context: string
-  significance: 'high' | 'medium' | 'low'
-  findingType: 'objection' | 'need' | 'competitive' | 'question' | 'feedback'
-  callId: string; callTitle: string; account: string
+  quote: string; timestamp: string; context: string;
+  significance: 'high' | 'medium' | 'low';
+  findingType: 'objection' | 'need' | 'competitive' | 'question' | 'feedback';
+  callId: string; callTitle: string; account: string;
 }
 
 interface SynthesisTheme {
-  theme: string; frequency: number; representativeQuotes: string[]; callIds: string[]
+  theme: string; frequency: number; representativeQuotes: string[]; callIds: string[];
 }
 ```
 
-**External dependencies:** none
+**External dependencies:** None
 
-**Internal dependencies:** none
+**Internal dependencies:** None
+
+**Notes:**
+- `TrackerOccurrence.startTime` preserves the raw Gong seconds value; `startTimeMs` is always pre-converted by `calls/route.ts` normalizeOutline logic
+- `OutlineSection` / `OutlineItem` timestamps are also pre-converted to ms in `calls/route.ts`
+- `AnalysisFinding` and `SynthesisTheme` are defined for forward compatibility (Phase 3 analysis features)
+- `GongSession` is the shape stored under the `gongwizard_session` key in `sessionStorage`
 
 ---
 
-## Dependency Graph
+## 2. Dependency Graph
 
 ```mermaid
 flowchart TD
-    subgraph external["External Services"]
-        GEMINI["Google Gemini API\n(Flash-Lite + 2.5 Pro)"]
-        GONG_API["Gong REST API\n(api.gong.io)"]
-        BROWSER_STORAGE["Browser Storage\n(sessionStorage / localStorage)"]
-    end
+  subgraph "External Services"
+    GEMINI["Google Gemini API\nFlash-Lite + 2.5 Pro"]
+    GONG["Gong REST API\napi.gong.io"]
+  end
 
-    subgraph routes["API Routes (consumers)"]
-        SCORE["/api/analyze/score"]
-        PROCESS["/api/analyze/process"]
-        BATCH_RUN["/api/analyze/batch-run"]
-        SYNTHESIZE["/api/analyze/synthesize"]
-        FOLLOWUP["/api/analyze/followup"]
-        GONG_CONNECT["/api/gong/connect"]
-        GONG_CALLS["/api/gong/calls"]
-        GONG_TRANSCRIPTS["/api/gong/transcripts"]
-        GONG_SEARCH["/api/gong/search"]
-    end
+  subgraph "src/lib/"
+    AI["ai-providers.ts"]
+    GAPI["gong-api.ts"]
+    TSURG["transcript-surgery.ts"]
+    TFMT["transcript-formatter.ts"]
+    TALIGN["tracker-alignment.ts"]
+    FILT["filters.ts"]
+    SESS["session.ts"]
+    FMTU["format-utils.ts"]
+    TOKU["token-utils.ts"]
+    BROW["browser-utils.ts"]
+    UTILS["utils.ts"]
+  end
 
-    subgraph hooks["Hooks (consumers)"]
-        USE_EXPORT["useCallExport"]
-        USE_FILTER["useFilterState"]
-    end
+  subgraph "src/hooks/"
+    EXPORT["useCallExport.ts"]
+    FILTER["useFilterState.ts"]
+  end
 
-    subgraph lib["src/lib/"]
-        AI["ai-providers.ts"]
-        GONG["gong-api.ts"]
-        FORMATTER["transcript-formatter.ts"]
-        SURGERY["transcript-surgery.ts"]
-        TRACKER["tracker-alignment.ts"]
-        FILTERS["filters.ts"]
-        SESSION["session.ts"]
-        FORMAT_UTILS["format-utils.ts"]
-        TOKEN["token-utils.ts"]
-        BROWSER["browser-utils.ts"]
-        UTILS["utils.ts"]
-    end
+  subgraph "src/types/"
+    TYPES["gong.ts"]
+  end
 
-    subgraph types["src/types/"]
-        GONG_TYPES["gong.ts"]
-    end
+  subgraph "API Routes (analyze)"
+    SCORE["/api/analyze/score"]
+    PROC["/api/analyze/process"]
+    RUN["/api/analyze/run"]
+    BATCH["/api/analyze/batch-run"]
+    SYNTH["/api/analyze/synthesize"]
+    FOLLOWUP["/api/analyze/followup"]
+  end
 
-    %% External service connections
-    AI --> GEMINI
-    GONG --> GONG_API
-    SESSION --> BROWSER_STORAGE
-    USE_FILTER --> BROWSER_STORAGE
+  subgraph "API Routes (gong)"
+    CONNECT["/api/gong/connect"]
+    CALLS["/api/gong/calls"]
+    TRANS["/api/gong/transcripts"]
+    SEARCH["/api/gong/search"]
+  end
 
-    %% Route → lib dependencies
-    SCORE --> AI
-    PROCESS --> AI
-    PROCESS --> SURGERY
-    BATCH_RUN --> AI
-    SYNTHESIZE --> AI
-    FOLLOWUP --> AI
-    GONG_CONNECT --> GONG
-    GONG_CALLS --> GONG
-    GONG_TRANSCRIPTS --> GONG
-    GONG_SEARCH --> GONG
-    GONG_SEARCH --> FORMAT_UTILS
+  subgraph "Components"
+    PANEL["analyze-panel.tsx"]
+  end
 
-    %% Hook → lib dependencies
-    USE_EXPORT --> FORMATTER
-    USE_EXPORT --> BROWSER
+  AI --> GEMINI
+  GAPI --> GONG
 
-    %% Intra-lib dependencies
-    FORMATTER --> TOKEN
-    FORMATTER --> FORMAT_UTILS
-    FORMATTER --> TRACKER
-    FORMATTER --> SURGERY
+  SCORE --> AI
+  PROC --> AI
+  RUN --> AI
+  BATCH --> AI
+  SYNTH --> AI
+  FOLLOWUP --> AI
 
-    SURGERY --> TRACKER
+  CONNECT --> GAPI
+  CALLS --> GAPI
+  TRANS --> GAPI
+  SEARCH --> GAPI
+  SEARCH --> FMTU
 
-    %% Types annotation
-    GONG_TYPES -. "shared interfaces\nacross all layers" .-> FORMATTER
+  TSURG --> TALIGN
+
+  TFMT --> TOKU
+  TFMT --> FMTU
+  TFMT --> TALIGN
+  TFMT --> TSURG
+
+  EXPORT --> FMTU
+  EXPORT --> BROW
+  EXPORT --> TFMT
+  EXPORT --> TYPES
+
+  PANEL --> FMTU
+  PANEL --> TALIGN
+  PANEL --> TSURG
 ```
 
 ---
 
-## Constants and Configuration
+## 3. Constants and Configuration
 
 | Name | Value | File | Purpose |
-| --- | --- | --- | --- |
-| `GONG_RATE_LIMIT_MS` | `350` | `src/lib/gong-api.ts` | Milliseconds to wait between paginated Gong API requests. Keeps throughput safely under Gong's ~3 req/s limit. |
-| `EXTENSIVE_BATCH_SIZE` | `10` | `src/lib/gong-api.ts` | Maximum call IDs per `/v2/calls/extensive` POST. Hard limit enforced by Gong. |
-| `TRANSCRIPT_BATCH_SIZE` | `50` | `src/lib/gong-api.ts` | Maximum call IDs per `/v2/calls/transcript` POST. Hard limit enforced by Gong. |
-| `MAX_RETRIES` | `5` | `src/lib/gong-api.ts` | Maximum retry attempts before throwing. Backoff formula: `min(2^attempt * 2, 30)` seconds. |
-| `INTERNAL_WORD_THRESHOLD` | `150` | `src/lib/transcript-formatter.ts` | Word count above which internal (rep) turns are condensed to first 2 + last 2 sentences with `[...]` in the middle. |
-| `GREETING_CLOSING_WINDOW_MS` | `60_000` | `src/lib/transcript-surgery.ts` | First and last 60 seconds of a call are treated as greeting/closing zones. Short utterances (< 15 words) in these windows are dropped by `performSurgery`. |
-| `WINDOW_MS` (tracker alignment) | `3000` | `src/lib/tracker-alignment.ts` | ±3 second fallback window when exact tracker-to-utterance containment fails. |
-| `SESSION_KEY` | `'gongwizard_session'` | `src/lib/session.ts` | `sessionStorage` key. Stores `authHeader`, `users`, `trackers`, `workspaces`, `internalDomains`, `baseUrl`. Cleared on tab close. |
-| `STORAGE_KEY` | `'gongwizard_filters'` | `src/hooks/useFilterState.ts` | `localStorage` key. Persists numeric/boolean filters only; text searches (`searchText`, `participantSearch`, `aiContentSearch`) are not persisted. |
-| Token label thresholds | `8000 / 16000 / 128000 / 200000` | `src/lib/token-utils.ts` | Breakpoints for the four context window size labels shown in the export UI ("Small", "Medium", "Large", "Very large"). |
-| Token color thresholds | `32000 / 128000` | `src/lib/token-utils.ts` | Green below 32K tokens, yellow 32K–128K, red above 128K. |
-| Gemini cheap model | `'gemini-2.0-flash-lite'` | `src/lib/ai-providers.ts` | Used for relevance scoring and smart truncation. Default `maxOutputTokens`: 1024. |
-| Gemini smart model | `'gemini-2.5-pro'` | `src/lib/ai-providers.ts` | Used for finding extraction, synthesis, and follow-up Q&A. Default `maxOutputTokens`: 8192. |
-| `findNearestOutlineItem` window | `30_000` ms | `src/lib/transcript-surgery.ts` | Default ±30s window for matching a transcript timestamp to the nearest Gong AI outline item description. |
-| Smart truncation word threshold | `60` words | `src/lib/transcript-surgery.ts` | Internal monologues exceeding this length are flagged `needsSmartTruncation = true` and queued for `/api/analyze/process`. |
-| Minimum utterance word count | `8` words | `src/lib/transcript-surgery.ts` | Utterances shorter than 8 words are dropped during surgery (ported from GongWizard V2 rule). |
+|---|---|---|---|
+| `GONG_RATE_LIMIT_MS` | `350` | `src/lib/gong-api.ts` | Minimum delay (ms) between paginated Gong API requests; keeps rate safely under Gong's ~3 req/s limit |
+| `EXTENSIVE_BATCH_SIZE` | `10` | `src/lib/gong-api.ts` | Max call IDs per `/v2/calls/extensive` POST batch (Gong API hard limit) |
+| `TRANSCRIPT_BATCH_SIZE` | `50` | `src/lib/gong-api.ts` | Max call IDs per `/v2/calls/transcript` POST batch (Gong API hard limit) |
+| `MAX_RETRIES` | `5` | `src/lib/gong-api.ts` | Max retry attempts per Gong API request before throwing |
+| `INTERNAL_WORD_THRESHOLD` | `150` | `src/lib/transcript-formatter.ts` | Internal speaker turns with 150+ words are condensed to first 2 + last 2 sentences when `condenseMonologues` is enabled |
+| `GREETING_CLOSING_WINDOW_MS` | `60_000` | `src/lib/transcript-surgery.ts` | Utterances in the first or last 60 seconds of a call AND under 15 words are filtered out during surgery as greetings/closings |
+| `WINDOW_MS` (tracker alignment) | `3000` | `src/lib/tracker-alignment.ts` | Fallback window (±3 seconds) for tracker-to-utterance alignment when exact containment fails |
+| `SESSION_KEY` | `'gongwizard_session'` | `src/lib/session.ts` | sessionStorage key holding Gong credentials, users, trackers, workspaces, and internal domains |
+| `STORAGE_KEY` (filters) | `'gongwizard_filters'` | `src/hooks/useFilterState.ts` | localStorage key for persisted filter state (duration, talk ratio, excludeInternal, minExternalSpeakers) |
+| `TOKEN_BUDGET` | `800_000` | `src/components/analyze-panel.tsx` | Max estimated input tokens across all calls before analysis pipeline is halted; leaves headroom for system prompt and output within Gemini 2.5 Pro's ~1M token context window |
+| `MAX_QUESTIONS` | `5` | `src/components/analyze-panel.tsx` | Maximum follow-up questions allowed per analysis session |
+| `MAX_RANGE_DAYS` | `365` | `src/app/page.tsx` | Maximum date range selectable on the Connect page (1 year) |
+| `durationRange` defaults | `[0, 7200]` | `src/hooks/useFilterState.ts` | Default call duration filter range: 0 to 7200 seconds (2 hours) |
+| `talkRatioRange` defaults | `[0, 100]` | `src/hooks/useFilterState.ts` | Default internal talk ratio filter range: 0–100% |
+| Backoff cap | `30 * 1000 ms` | `src/lib/gong-api.ts` | Maximum retry delay for Gong API requests; exponential backoff is capped at 30 seconds |
+| Cheap model | `'gemini-2.5-flash-lite'` | `src/lib/ai-providers.ts` | Gemini model for scoring and smart truncation (fast, low cost) |
+| Smart model | `'gemini-2.5-pro'` | `src/lib/ai-providers.ts` | Gemini model for finding extraction, synthesis, and follow-up Q&A (full quality) |
+| `smartComplete` default `maxOutputTokens` | `8192` | `src/lib/ai-providers.ts` | Default output token limit for smart tier calls (overridden per-route: batch-run uses 16384) |
+| `findNearestOutlineItem` window | `30_000 ms` | `src/lib/transcript-surgery.ts` | Default ±30s search window for matching a transcript timestamp to the nearest Gong AI outline item description |
