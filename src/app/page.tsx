@@ -6,8 +6,14 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Eye, EyeOff, Lock, X, Shield, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { Calendar } from '@/components/ui/calendar';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Eye, EyeOff, Lock, X, Shield, ChevronDown, ChevronUp, Loader2, CalendarIcon } from 'lucide-react';
 import { saveSession } from '@/lib/session';
+import { format, subMonths, subYears, differenceInDays } from 'date-fns';
+import type { DateRange } from 'react-day-picker';
+
+const MAX_RANGE_DAYS = 365;
 
 export default function ConnectPage() {
   const router = useRouter();
@@ -17,6 +23,12 @@ export default function ConnectPage() {
   const [showHelp, setShowHelp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const today = new Date();
+  const [dateRange, setDateRange] = useState<DateRange>({
+    from: subMonths(today, 3),
+    to: today,
+  });
 
   async function handleConnect(e: React.FormEvent) {
     e.preventDefault();
@@ -45,7 +57,12 @@ export default function ConnectPage() {
         return;
       }
 
-      saveSession({ ...data, authHeader });
+      saveSession({
+        ...data,
+        authHeader,
+        fromDate: dateRange.from?.toISOString(),
+        toDate: dateRange.to?.toISOString(),
+      });
       router.push('/calls');
     } catch {
       setError('Network error. Please check your connection and try again.');
@@ -120,6 +137,46 @@ export default function ConnectPage() {
                     {showSecret ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
                 </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Date Range</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start text-left font-normal"
+                      disabled={loading}
+                    >
+                      <CalendarIcon className="mr-2 size-4 text-muted-foreground" />
+                      {dateRange.from && dateRange.to ? (
+                        <span>
+                          {format(dateRange.from, 'MMM d, yyyy')} – {format(dateRange.to, 'MMM d, yyyy')}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">Pick a date range</span>
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar
+                      mode="range"
+                      selected={dateRange}
+                      onSelect={(range) => {
+                        if (range?.from && range?.to && differenceInDays(range.to, range.from) > MAX_RANGE_DAYS) {
+                          return;
+                        }
+                        if (range) setDateRange(range);
+                      }}
+                      numberOfMonths={2}
+                      disabled={{ after: today, before: subYears(today, 1) }}
+                      defaultMonth={subMonths(today, 1)}
+                    />
+                    <div className="border-t px-3 py-2 text-xs text-muted-foreground">
+                      Max range: 1 year. Defaults to last 3 months.
+                    </div>
+                  </PopoverContent>
+                </Popover>
               </div>
 
               <div className="rounded-md border bg-muted/50">

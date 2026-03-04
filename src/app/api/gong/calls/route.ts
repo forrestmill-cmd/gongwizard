@@ -116,15 +116,23 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({}));
-  const { baseUrl: rawBaseUrl, workspaceId } = body;
+  const { baseUrl: rawBaseUrl, workspaceId, fromDate: clientFrom, toDate: clientTo } = body;
 
-  // Hardcode 90-day range
-  const now = new Date();
-  const from = new Date(now);
-  from.setDate(from.getDate() - DEFAULT_DAYS);
-  from.setHours(0, 0, 0, 0);
-  const toDate = now.toISOString();
-  const fromDate = from.toISOString();
+  // Use client-provided dates, fall back to last 90 days
+  let fromDate: string;
+  let toDate: string;
+
+  if (clientFrom && clientTo) {
+    fromDate = new Date(clientFrom).toISOString();
+    toDate = new Date(clientTo).toISOString();
+  } else {
+    const now = new Date();
+    const from = new Date(now);
+    from.setDate(from.getDate() - DEFAULT_DAYS);
+    from.setHours(0, 0, 0, 0);
+    toDate = now.toISOString();
+    fromDate = from.toISOString();
+  }
 
   const baseUrl = (rawBaseUrl || 'https://api.gong.io').replace(/\/+$/, '');
   const gongFetch = makeGongFetch(baseUrl, authHeader);

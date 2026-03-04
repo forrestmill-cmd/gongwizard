@@ -379,6 +379,8 @@ export default function CallsPage() {
         body: JSON.stringify({
           baseUrl: session.baseUrl,
           ...(workspaceId ? { workspaceId } : {}),
+          ...(session.fromDate ? { fromDate: session.fromDate } : {}),
+          ...(session.toDate ? { toDate: session.toDate } : {}),
         }),
       });
 
