@@ -26,6 +26,7 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { MultiSelect, type MultiSelectOption } from '@/components/ui/multi-select';
 import { format, subDays } from 'date-fns';
 import { formatDuration, isInternalParty, truncateToFirstSentence } from '@/lib/format-utils';
 import {
@@ -276,10 +277,22 @@ export default function CallsPage() {
     calls,
   ]);
 
+  // Session trackers = curated account-level definitions from /v2/settings/trackers (via connect flow)
+  // Call trackers = per-call tracker names from the extensive API (includes auto-detected ones)
+  // Prefer session trackers for chip display (curated, manageable count).
+  // Fall back to call-derived trackers if session has none.
   const allTrackers: string[] = useMemo(() => {
-    if (!session?.trackers) return [];
-    return session.trackers.map((t: any) => t.name || t.id || String(t));
-  }, [session]);
+    const sessionNames = (session?.trackers || []).map((t: any) => t.name || t.id || String(t)).filter(Boolean);
+    if (sessionNames.length > 0) return sessionNames;
+    // Fallback: derive from call data
+    const names = new Set<string>();
+    for (const call of calls) {
+      for (const t of call.trackers || []) {
+        if (t) names.add(t);
+      }
+    }
+    return [...names].sort();
+  }, [session, calls]);
 
   const allTopics = useMemo(() => {
     const topicSet = new Set<string>();
@@ -391,14 +404,6 @@ export default function CallsPage() {
           else externalCount++;
         }
 
-        const trackerSet = new Set<string>();
-        for (const t of call.trackers || []) {
-          if (t.count != null && t.count <= 0) continue;
-          const name = t.name || t.trackerName || t.id;
-          if (name) trackerSet.add(name);
-        }
-        const trackerNames = [...trackerSet];
-
         return {
           id: call.id,
           title: call.title || 'Untitled Call',
@@ -406,7 +411,8 @@ export default function CallsPage() {
           duration: call.duration || 0,
           accountName: call.metaData?.accountName || call.accountName || '',
           topics: call.topics || [],
-          trackers: trackerNames,
+          trackers: call.trackers || [],
+          trackerData: call.trackerData || [],
           brief: call.brief || call.highlights?.brief || '',
           parties,
           interactionStats: call.interactionStats,
@@ -600,52 +606,8 @@ export default function CallsPage() {
           {hasLoaded && (
             <div className="bg-background border-b px-4 py-3 space-y-3 shrink-0">
 
-              {/* Tracker chips */}
-              {trackersWithCalls.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {trackersWithCalls.map((tracker) => (
-                    <button
-                      key={tracker}
-                      type="button"
-                      onClick={() => filters.toggleTracker(tracker)}
-                      className={cn(
-                        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors",
-                        filters.activeTrackers.has(tracker)
-                          ? "border-primary bg-primary/10 text-primary font-medium"
-                          : "border-border text-muted-foreground hover:bg-muted"
-                      )}
-                    >
-                      {tracker}
-                      <span className="opacity-60">{trackerCounts[tracker] ?? 0}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {/* Topic chips */}
-              {allTopics.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {allTopics.map((topic) => (
-                    <button
-                      key={topic}
-                      type="button"
-                      onClick={() => filters.toggleTopic(topic)}
-                      className={cn(
-                        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors",
-                        filters.activeTopics.has(topic)
-                          ? "border-primary bg-primary/10 text-primary font-medium"
-                          : "border-border text-muted-foreground hover:bg-muted"
-                      )}
-                    >
-                      {topic}
-                      <span className="opacity-60">{topicCounts[topic] ?? 0}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {/* Search row */}
-              <div className="flex items-center gap-3 flex-wrap">
+              {/* Search + filter dropdowns */}
+              <div className="flex items-center gap-2 flex-wrap">
                 <div className="relative flex-1 min-w-[200px]">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
                   <Input
@@ -655,6 +617,34 @@ export default function CallsPage() {
                     className="pl-8 h-8 text-sm"
                   />
                 </div>
+
+                {trackersWithCalls.length > 0 && (
+                  <MultiSelect
+                    options={trackersWithCalls.map((t) => ({
+                      value: t,
+                      label: t,
+                      count: trackerCounts[t] ?? 0,
+                    }))}
+                    selected={filters.activeTrackers}
+                    onToggle={filters.toggleTracker}
+                    placeholder="Trackers"
+                    searchPlaceholder="Search trackers…"
+                  />
+                )}
+
+                {allTopics.length > 0 && (
+                  <MultiSelect
+                    options={allTopics.map((t) => ({
+                      value: t,
+                      label: t,
+                      count: topicCounts[t] ?? 0,
+                    }))}
+                    selected={filters.activeTopics}
+                    onToggle={filters.toggleTopic}
+                    placeholder="Topics"
+                    searchPlaceholder="Search topics…"
+                  />
+                )}
 
                 <div className="flex items-center gap-2">
                   <Checkbox
