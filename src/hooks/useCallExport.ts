@@ -141,7 +141,7 @@ export function useCallExport({
         markdown: 'md',
         xml: 'xml',
         jsonl: 'jsonl',
-        'summary-csv': 'csv',
+        csv: 'csv',
         'utterance-csv': 'csv',
       };
       const extension = extensionMap[exportFormat] ?? 'txt';

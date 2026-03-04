@@ -27,7 +27,6 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format, subDays } from 'date-fns';
-import { contextLabel, contextColor } from '@/lib/token-utils';
 import { formatDuration, isInternalParty, truncateToFirstSentence } from '@/lib/format-utils';
 import {
   matchesTextSearch,
@@ -46,9 +45,6 @@ import { useCallExport } from '@/hooks/useCallExport';
 import { useFilterState } from '@/hooks/useFilterState';
 import { getSession } from '@/lib/session';
 import { GongCall } from '@/types/gong';
-
-const WORDS_PER_CALL_MINUTE = 130;
-const WORDS_TO_TOKENS_RATIO = 1.3;
 
 const FORMAT_OPTIONS = [
   { value: 'markdown',      label: 'Markdown',      desc: 'Upload to ChatGPT or Claude' },
@@ -167,23 +163,6 @@ function CallCard({
               </p>
             )}
 
-            {call.talkRatio !== undefined && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-16 shrink-0">
-                  Talk ratio
-                </span>
-                <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary rounded-full transition-all"
-                    style={{ width: `${Math.min(100, (call.talkRatio || 0) * 100)}%` }}
-                  />
-                </div>
-                <span className="text-xs text-muted-foreground w-8 text-right">
-                  {Math.round((call.talkRatio || 0) * 100)}%
-                </span>
-              </div>
-            )}
-
             {transcriptSearchActive && (() => {
               const visible =
                 speakerFilter === 'all'
@@ -240,6 +219,7 @@ export default function CallsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [workspaceId, setWorkspaceId] = useState<string>('');
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [showTranscriptSearch, setShowTranscriptSearch] = useState(false);
 
   const [rightPanelTab, setRightPanelTab] = useState<'export' | 'analyze'>('analyze');
 
@@ -293,7 +273,6 @@ export default function CallsPage() {
     filters.talkRatioRange,
     filters.participantSearch,
     filters.minExternalSpeakers,
-    filters.aiContentSearch,
     calls,
   ]);
 
@@ -317,17 +296,25 @@ export default function CallsPage() {
 
   const topicCounts = useMemo(() => computeTopicCounts(calls), [calls]);
 
+  const trackersWithCalls = useMemo(
+    () => allTrackers.filter((t) => (trackerCounts[t] ?? 0) > 0),
+    [allTrackers, trackerCounts]
+  );
+
   const filteredCalls = useMemo(() => {
     return calls.filter((call) => {
       if (filters.excludeInternal && call.externalSpeakerCount === 0) return false;
-      if (!matchesTextSearch(call, filters.searchText)) return false;
+      if (filters.searchText.trim()) {
+        const matchesText = matchesTextSearch(call, filters.searchText);
+        const matchesAi = matchesAiContentSearch(call, filters.searchText);
+        if (!matchesText && !matchesAi) return false;
+      }
       if (!matchesTrackers(call, filters.activeTrackers)) return false;
       if (!matchesTopics(call, filters.activeTopics)) return false;
       if (!matchesDurationRange(call, filters.durationRange[0], filters.durationRange[1])) return false;
       if (!matchesTalkRatioRange(call, filters.talkRatioRange[0], filters.talkRatioRange[1])) return false;
       if (!matchesParticipantName(call, filters.participantSearch)) return false;
       if (!matchesMinExternalSpeakers(call, filters.minExternalSpeakers)) return false;
-      if (!matchesAiContentSearch(call, filters.aiContentSearch)) return false;
       if (transcriptSearchActive) {
         const matches = searchMatches.get(call.id) || [];
         if (matches.length === 0) return false;
@@ -350,7 +337,6 @@ export default function CallsPage() {
     filters.talkRatioRange,
     filters.participantSearch,
     filters.minExternalSpeakers,
-    filters.aiContentSearch,
     transcriptSearchActive,
     searchMatches,
     speakerFilter,
@@ -471,7 +457,7 @@ export default function CallsPage() {
 
   async function runTranscriptSearch() {
     if (!session || !transcriptKeyword.trim()) return;
-    const ids = filteredCalls.map((c) => c.id).slice(0, 500); // Cap at 500 to stay within transcript batch limits and keep search latency reasonable
+    const ids = filteredCalls.map((c) => c.id).slice(0, 500);
 
     setIsSearchingTranscripts(true);
     setSearchMatches(new Map());
@@ -549,14 +535,6 @@ export default function CallsPage() {
     router.replace('/');
   }
 
-  const tokenEstimate = useMemo(() => {
-    return selectedCalls.reduce((sum, c) => {
-      const minutes = c.duration / 60;
-      const estimatedWords = minutes * WORDS_PER_CALL_MINUTE;
-      return sum + Math.ceil(estimatedWords * WORDS_TO_TOKENS_RATIO);
-    }, 0);
-  }, [selectedCalls]);
-
   if (!session) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -566,9 +544,9 @@ export default function CallsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-muted/30 flex flex-col">
+    <div className="h-screen bg-muted/30 flex flex-col overflow-hidden">
       {/* Top bar */}
-      <header className="bg-background border-b px-4 py-3 flex items-center gap-4 sticky top-0 z-10">
+      <header className="bg-background border-b px-4 py-3 flex items-center gap-4 shrink-0">
         <span className="font-bold text-base tracking-tight">GongWizard</span>
         <div className="flex-1 flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-2">
@@ -612,46 +590,20 @@ export default function CallsPage() {
         </Button>
       </header>
 
-      {/* Body: 3-column layout */}
+      {/* Body: 2-column layout */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar: filters */}
-        <aside className="w-[240px] shrink-0 border-r bg-background p-4 overflow-y-auto hidden md:block">
-          <div className="space-y-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Filters
-            </h3>
 
-            {/* Text search */}
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-              <Input
-                placeholder="Search calls…"
-                value={filters.searchText}
-                onChange={(e) => filters.setSearchText(e.target.value)}
-                className="pl-8 h-8 text-sm"
-              />
-            </div>
+        {/* Center: filters + call list */}
+        <div className="flex-1 flex flex-col overflow-hidden">
 
-            {/* Exclude internal */}
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="excludeInternal"
-                checked={filters.excludeInternal}
-                onCheckedChange={(v) => filters.setExcludeInternal(!!v)}
-              />
-              <Label htmlFor="excludeInternal" className="text-sm leading-tight cursor-pointer">
-                Exclude internal-only calls
-              </Label>
-            </div>
+          {/* Filter area — only shown after calls are loaded */}
+          {hasLoaded && (
+            <div className="bg-background border-b px-4 py-3 space-y-3 shrink-0">
 
-            {/* Tracker chips */}
-            {hasLoaded && allTrackers.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Trackers
-                </h3>
+              {/* Tracker chips */}
+              {trackersWithCalls.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
-                  {allTrackers.map((tracker) => (
+                  {trackersWithCalls.map((tracker) => (
                     <button
                       key={tracker}
                       type="button"
@@ -668,16 +620,11 @@ export default function CallsPage() {
                     </button>
                   ))}
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* Topic chips */}
-            {hasLoaded && allTopics.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Topics
-                </h3>
-                <div className="flex flex-wrap gap-1.5 max-h-[110px] overflow-y-auto">
+              {/* Topic chips */}
+              {allTopics.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
                   {allTopics.map((topic) => (
                     <button
                       key={topic}
@@ -695,247 +642,244 @@ export default function CallsPage() {
                     </button>
                   ))}
                 </div>
-              </div>
-            )}
-
-            {/* More filters toggle */}
-            <button
-              type="button"
-              onClick={() => setShowAdvancedFilters((v) => !v)}
-              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full"
-            >
-              {showAdvancedFilters ? (
-                <ChevronUp className="size-3.5" />
-              ) : (
-                <ChevronDown className="size-3.5" />
               )}
-              {showAdvancedFilters ? 'Hide filters' : 'More filters'}
-            </button>
 
-            {/* Advanced filters (collapsed by default) */}
-            {showAdvancedFilters && (
-              <div className="space-y-4">
-                {/* AI Content Search */}
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">AI summary search</Label>
-                  <div className="relative">
-                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-                    <Input
-                      placeholder="Search AI summaries…"
-                      value={filters.aiContentSearch}
-                      onChange={(e) => filters.setAiContentSearch(e.target.value)}
-                      className="pl-8 h-8 text-sm"
-                    />
-                  </div>
-                </div>
-
-                {/* Participant Search */}
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">Participant name</Label>
-                  <Input
-                    placeholder="Search participants…"
-                    value={filters.participantSearch}
-                    onChange={(e) => filters.setParticipantSearch(e.target.value)}
-                    className="h-8 text-sm"
-                  />
-                </div>
-
-                {/* Duration Range */}
-                {calls.length > 0 && (
-                  <div className="space-y-2">
-                    <Label className="text-xs text-muted-foreground">Duration</Label>
-                    <Slider
-                      min={0}
-                      max={7200}
-                      step={60}
-                      value={filters.durationRange}
-                      onValueChange={(v) => filters.setDurationRange(v as [number, number])}
-                    />
-                    <div className="flex justify-between text-xs text-muted-foreground">
-                      <span>{formatDuration(filters.durationRange[0])}</span>
-                      <span>{formatDuration(filters.durationRange[1])}</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Talk Ratio Range */}
-                {calls.length > 0 && (
-                  <div className="space-y-2">
-                    <Label className="text-xs text-muted-foreground">Talk ratio</Label>
-                    <Slider
-                      min={0}
-                      max={100}
-                      step={5}
-                      value={filters.talkRatioRange}
-                      onValueChange={(v) => filters.setTalkRatioRange(v as [number, number])}
-                    />
-                    <div className="flex justify-between text-xs text-muted-foreground">
-                      <span>{filters.talkRatioRange[0]}%</span>
-                      <span>{filters.talkRatioRange[1]}%</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Min External Speakers */}
-                <div className="flex items-center gap-2">
-                  <Label className="text-xs text-muted-foreground whitespace-nowrap">Min external</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={10}
-                    value={filters.minExternalSpeakers}
-                    onChange={(e) => filters.setMinExternalSpeakers(Number(e.target.value) || 0)}
-                    className="h-7 w-16 text-xs"
-                  />
-                </div>
-
-                {/* Workspace (moved from header) */}
-                {session.workspaces?.length > 1 && (
-                  <div className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">Workspace</Label>
-                    <select
-                      aria-label="Workspace"
-                      value={workspaceId}
-                      onChange={(e) => setWorkspaceId(e.target.value)}
-                      className="w-full h-8 rounded-md border bg-background px-2 text-sm"
-                    >
-                      <option value="">All workspaces</option>
-                      {session.workspaces.map((ws: any) => (
-                        <option key={ws.id} value={ws.id}>{ws.name || ws.id}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Footer summary */}
-            {hasLoaded && (
-              <div className="pt-2 space-y-1 text-xs text-muted-foreground border-t">
-                <p>{calls.length} calls loaded</p>
-                <p>{filteredCalls.length} shown</p>
-              </div>
-            )}
-          </div>
-        </aside>
-
-        {/* Center: call list */}
-        <main className="flex-1 overflow-y-auto p-4 space-y-3">
-          {/* Transcript search — full-text search across loaded call transcripts */}
-          {hasLoaded && (
-            <div className="space-y-1.5">
-              <p className="text-xs text-muted-foreground font-medium">Search inside transcripts</p>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
+              {/* Search row */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="relative flex-1 min-w-[200px]">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
                   <Input
-                    placeholder="Search transcripts…"
-                    value={transcriptKeyword}
-                    onChange={(e) => setTranscriptKeyword(e.target.value)}
-                    onKeyDown={(e) =>
-                      e.key === 'Enter' && !isSearchingTranscripts && runTranscriptSearch()
-                    }
+                    placeholder="Search calls…"
+                    value={filters.searchText}
+                    onChange={(e) => filters.setSearchText(e.target.value)}
                     className="pl-8 h-8 text-sm"
-                    disabled={isSearchingTranscripts}
                   />
                 </div>
-                <select
-                  value={speakerFilter}
-                  onChange={(e) =>
-                    setSpeakerFilter(e.target.value as 'all' | 'external' | 'internal')
-                  }
-                  title="Filter by speaker type"
-                  className="h-8 rounded-md border bg-background px-2 text-sm text-muted-foreground"
+
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="excludeInternal"
+                    checked={filters.excludeInternal}
+                    onCheckedChange={(v) => filters.setExcludeInternal(!!v)}
+                  />
+                  <Label htmlFor="excludeInternal" className="text-xs leading-tight cursor-pointer whitespace-nowrap">
+                    Exclude internal
+                  </Label>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedFilters((v) => !v)}
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
                 >
-                  <option value="all">All speakers</option>
-                  <option value="external">Customer only</option>
-                  <option value="internal">Rep only</option>
-                </select>
-                <Button
-                  size="sm"
-                  className="h-8 shrink-0"
-                  onClick={runTranscriptSearch}
-                  disabled={
-                    isSearchingTranscripts ||
-                    !transcriptKeyword.trim() ||
-                    filteredCalls.length === 0
-                  }
+                  {showAdvancedFilters ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+                  More filters
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowTranscriptSearch((v) => !v)}
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
                 >
-                  {isSearchingTranscripts ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    'Search'
-                  )}
-                </Button>
+                  <Search className="size-3" />
+                  Search transcripts ›
+                </button>
               </div>
 
-              {isSearchingTranscripts && (
-                <p className="text-xs text-muted-foreground">
-                  Searching {searchProgress.searched}/{searchProgress.total} calls —{' '}
-                  {searchProgress.matchCount} matches…
-                </p>
-              )}
+              {/* Advanced filters (collapsible) */}
+              {showAdvancedFilters && (
+                <div className="flex flex-wrap gap-x-6 gap-y-3 pt-1 border-t">
+                  {/* Participant Search */}
+                  <div className="space-y-1 min-w-[180px]">
+                    <Label className="text-xs text-muted-foreground">Participant name</Label>
+                    <Input
+                      placeholder="Search participants…"
+                      value={filters.participantSearch}
+                      onChange={(e) => filters.setParticipantSearch(e.target.value)}
+                      className="h-8 text-sm"
+                    />
+                  </div>
 
-              {transcriptSearchActive && (
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="text-muted-foreground">
-                    {searchProgress.matchCount} match
-                    {searchProgress.matchCount !== 1 ? 'es' : ''} in {searchMatches.size} call
-                    {searchMatches.size !== 1 ? 's' : ''}
-                  </span>
-                  {searchMatches.size > 0 && (
-                    <button
-                      type="button"
-                      className="text-primary underline"
-                      onClick={() =>
-                        setSelectedIds((prev) => {
-                          const next = new Set(prev);
-                          [...searchMatches.keys()].forEach((id) => next.add(id));
-                          return next;
-                        })
-                      }
-                    >
-                      Select all
-                    </button>
+                  {/* Duration Range */}
+                  {calls.length > 0 && (
+                    <div className="space-y-2 min-w-[160px]">
+                      <Label className="text-xs text-muted-foreground">Duration</Label>
+                      <Slider
+                        min={0}
+                        max={7200}
+                        step={60}
+                        value={filters.durationRange}
+                        onValueChange={(v) => filters.setDurationRange(v as [number, number])}
+                      />
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>{formatDuration(filters.durationRange[0])}</span>
+                        <span>{formatDuration(filters.durationRange[1])}</span>
+                      </div>
+                    </div>
                   )}
-                  <span className="text-muted-foreground">·</span>
-                  <button
-                    type="button"
-                    className="text-muted-foreground underline"
-                    onClick={() => {
-                      setTranscriptSearchActive(false);
-                      setSearchMatches(new Map());
-                    }}
-                  >
-                    Clear
-                  </button>
+
+                  {/* Talk Ratio Range */}
+                  {calls.length > 0 && (
+                    <div className="space-y-2 min-w-[160px]">
+                      <Label className="text-xs text-muted-foreground">Talk ratio</Label>
+                      <Slider
+                        min={0}
+                        max={100}
+                        step={5}
+                        value={filters.talkRatioRange}
+                        onValueChange={(v) => filters.setTalkRatioRange(v as [number, number])}
+                      />
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>{filters.talkRatioRange[0]}%</span>
+                        <span>{filters.talkRatioRange[1]}%</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Min External Speakers */}
+                  <div className="flex items-end gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground whitespace-nowrap">Min external speakers</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={10}
+                        value={filters.minExternalSpeakers}
+                        onChange={(e) => filters.setMinExternalSpeakers(Number(e.target.value) || 0)}
+                        className="h-8 w-16 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Workspace */}
+                  {session.workspaces?.length > 1 && (
+                    <div className="space-y-1 min-w-[160px]">
+                      <Label className="text-xs text-muted-foreground">Workspace</Label>
+                      <select
+                        aria-label="Workspace"
+                        value={workspaceId}
+                        onChange={(e) => setWorkspaceId(e.target.value)}
+                        className="w-full h-8 rounded-md border bg-background px-2 text-sm"
+                      >
+                        <option value="">All workspaces</option>
+                        {session.workspaces.map((ws: any) => (
+                          <option key={ws.id} value={ws.id}>{ws.name || ws.id}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {!transcriptSearchActive &&
-                !isSearchingTranscripts &&
-                filteredCalls.length > 500 && (
-                  <p className="text-xs text-amber-600">
-                    Note: transcript search covers first 500 of {filteredCalls.length} calls
-                  </p>
-                )}
+              {/* Transcript search (collapsible) */}
+              {showTranscriptSearch && (
+                <div className="space-y-2 pt-1 border-t">
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+                      <Input
+                        placeholder="Search transcripts…"
+                        value={transcriptKeyword}
+                        onChange={(e) => setTranscriptKeyword(e.target.value)}
+                        onKeyDown={(e) =>
+                          e.key === 'Enter' && !isSearchingTranscripts && runTranscriptSearch()
+                        }
+                        className="pl-8 h-8 text-sm"
+                        disabled={isSearchingTranscripts}
+                      />
+                    </div>
+                    <select
+                      value={speakerFilter}
+                      onChange={(e) =>
+                        setSpeakerFilter(e.target.value as 'all' | 'external' | 'internal')
+                      }
+                      title="Filter by speaker type"
+                      className="h-8 rounded-md border bg-background px-2 text-sm text-muted-foreground"
+                    >
+                      <option value="all">All speakers</option>
+                      <option value="external">Customer only</option>
+                      <option value="internal">Rep only</option>
+                    </select>
+                    <Button
+                      size="sm"
+                      className="h-8 shrink-0"
+                      onClick={runTranscriptSearch}
+                      disabled={
+                        isSearchingTranscripts ||
+                        !transcriptKeyword.trim() ||
+                        filteredCalls.length === 0
+                      }
+                    >
+                      {isSearchingTranscripts ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        'Search'
+                      )}
+                    </Button>
+                  </div>
+
+                  {isSearchingTranscripts && (
+                    <p className="text-xs text-muted-foreground">
+                      Searching {searchProgress.searched}/{searchProgress.total} calls —{' '}
+                      {searchProgress.matchCount} matches…
+                    </p>
+                  )}
+
+                  {transcriptSearchActive && (
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-muted-foreground">
+                        {searchProgress.matchCount} match
+                        {searchProgress.matchCount !== 1 ? 'es' : ''} in {searchMatches.size} call
+                        {searchMatches.size !== 1 ? 's' : ''}
+                      </span>
+                      {searchMatches.size > 0 && (
+                        <button
+                          type="button"
+                          className="text-primary underline"
+                          onClick={() =>
+                            setSelectedIds((prev) => {
+                              const next = new Set(prev);
+                              [...searchMatches.keys()].forEach((id) => next.add(id));
+                              return next;
+                            })
+                          }
+                        >
+                          Select all
+                        </button>
+                      )}
+                      <span className="text-muted-foreground">·</span>
+                      <button
+                        type="button"
+                        className="text-muted-foreground underline"
+                        onClick={() => {
+                          setTranscriptSearchActive(false);
+                          setSearchMatches(new Map());
+                        }}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  )}
+
+                  {!transcriptSearchActive && !isSearchingTranscripts && filteredCalls.length > 500 && (
+                    <p className="text-xs text-amber-600">
+                      Note: transcript search covers first 500 of {filteredCalls.length} calls
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
-          {/* Mobile search */}
-          <div className="md:hidden relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Search calls…"
-              value={filters.searchText}
-              onChange={(e) => filters.setSearchText(e.target.value)}
-              className="pl-8 h-8 text-sm"
-            />
-          </div>
-
-          {/* Select all / deselect all */}
+          {/* Select bar */}
           {filteredCalls.length > 0 && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <div className="bg-background border-b px-4 py-2 flex items-center gap-2 shrink-0">
+              <span className="text-sm text-muted-foreground">
+                {filteredCalls.length} {filteredCalls.length === 1 ? 'call' : 'calls'}
+                {hasLoaded && calls.length !== filteredCalls.length && (
+                  <span className="text-xs"> of {calls.length}</span>
+                )}
+              </span>
               <Button variant="ghost" size="xs" onClick={selectAll} className="h-7 gap-1">
                 <CheckSquare className="size-3.5" />
                 Select All
@@ -944,61 +888,81 @@ export default function CallsPage() {
                 <Square className="size-3.5" />
                 Deselect All
               </Button>
-              <span className="ml-auto">
+              <span className="ml-auto text-sm text-muted-foreground">
                 {selectedIds.size} selected
               </span>
             </div>
           )}
 
-          {loadError && (
-            <div className="flex items-start gap-2 rounded-md bg-destructive/10 text-destructive px-3 py-2.5 text-sm">
-              <AlertCircle className="size-4 mt-0.5 shrink-0" />
-              {loadError}
-            </div>
-          )}
+          {/* Call cards list (scrollable) */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-3">
 
-          {loading && (
-            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-3">
-              <Loader2 className="size-8 animate-spin" />
-              <p className="text-sm">Loading calls from Gong…</p>
-            </div>
-          )}
+            {loadError && (
+              <div className="flex items-start gap-2 rounded-md bg-destructive/10 text-destructive px-3 py-2.5 text-sm">
+                <AlertCircle className="size-4 mt-0.5 shrink-0" />
+                {loadError}
+              </div>
+            )}
 
-          {!loading && hasLoaded && filteredCalls.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-2">
-              <p className="text-sm font-medium">No calls found</p>
-              <p className="text-xs">Try adjusting your date range or filters</p>
-            </div>
-          )}
+            {loading && (
+              <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-3">
+                <Loader2 className="size-8 animate-spin" />
+                <p className="text-sm">Loading calls from Gong…</p>
+              </div>
+            )}
 
-          {!loading && !hasLoaded && !loadError && (
-            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-2">
-              <p className="text-sm font-medium">Your call library is ready to analyze.</p>
-              <p className="text-xs">Set a date range above and load your calls.</p>
-              <p className="text-xs opacity-60">Most users load 30–90 days at a time.</p>
-            </div>
-          )}
+            {!loading && !hasLoaded && !loadError && (
+              <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-4 max-w-sm mx-auto text-center">
+                <p className="text-sm font-medium text-foreground">Get started</p>
+                <ol className="text-sm space-y-2 text-left list-none">
+                  <li className="flex gap-2">
+                    <span className="text-primary font-semibold shrink-0">1.</span>
+                    <span>Enter a date range and load your calls</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-primary font-semibold shrink-0">2.</span>
+                    <span>Filter by trackers, topics, or search</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-primary font-semibold shrink-0">3.</span>
+                    <span>Select the calls you want to analyze</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-primary font-semibold shrink-0">4.</span>
+                    <span>Run AI analysis or export transcript data</span>
+                  </li>
+                </ol>
+              </div>
+            )}
 
-          {filteredCalls.map((call) => (
-            <CallCard
-              key={call.id}
-              call={call}
-              isSelected={selectedIds.has(call.id)}
-              onToggle={toggleSelect}
-              transcriptSearchActive={transcriptSearchActive}
-              matchSnippets={searchMatches.get(call.id) || []}
-              speakerFilter={speakerFilter}
-              transcriptKeyword={transcriptKeyword}
-              getMatchAffiliation={getMatchAffiliation}
-              activeTrackers={filters.activeTrackers}
-              activeTopics={filters.activeTopics}
-            />
-          ))}
-        </main>
+            {!loading && hasLoaded && filteredCalls.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-2">
+                <p className="text-sm font-medium">No calls found</p>
+                <p className="text-xs">Try adjusting your date range or filters</p>
+              </div>
+            )}
 
-        {/* Right sidebar: analyze + export panel */}
-        <aside className="w-[280px] shrink-0 border-l bg-background overflow-y-auto hidden lg:flex lg:flex-col">
-          {/* Tab toggle */}
+            {filteredCalls.map((call) => (
+              <CallCard
+                key={call.id}
+                call={call}
+                isSelected={selectedIds.has(call.id)}
+                onToggle={toggleSelect}
+                transcriptSearchActive={transcriptSearchActive}
+                matchSnippets={searchMatches.get(call.id) || []}
+                speakerFilter={speakerFilter}
+                transcriptKeyword={transcriptKeyword}
+                getMatchAffiliation={getMatchAffiliation}
+                activeTrackers={filters.activeTrackers}
+                activeTopics={filters.activeTopics}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Right panel: Analyze | Export */}
+        <aside className="w-[380px] shrink-0 border-l bg-background flex flex-col overflow-hidden">
+          {/* Tab bar */}
           <div className="border-b px-4 pt-3 pb-0 shrink-0">
             <Tabs value={rightPanelTab} onValueChange={(v) => setRightPanelTab(v as 'export' | 'analyze')}>
               <TabsList className="w-full h-8">
@@ -1012,6 +976,7 @@ export default function CallsPage() {
             </Tabs>
           </div>
 
+          {/* Tab content */}
           <div className="flex-1 overflow-y-auto p-4">
             {rightPanelTab === 'analyze' && (
               <AnalyzePanel
@@ -1033,12 +998,6 @@ export default function CallsPage() {
                     <div>
                       <p className="font-semibold text-sm">
                         {selectedIds.size} {selectedIds.size === 1 ? 'call' : 'calls'} selected
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        ~{tokenEstimate.toLocaleString()} tokens estimated
-                      </p>
-                      <p className={`text-xs mt-0.5 font-medium ${contextColor(tokenEstimate)}`}>
-                        {contextLabel(tokenEstimate)}
                       </p>
                     </div>
 
@@ -1118,18 +1077,16 @@ export default function CallsPage() {
                           </>
                         )}
                       </Button>
-                      {selectedIds.size <= 10 && (
-                        <Button
-                          variant="outline"
-                          className="w-full"
-                          size="sm"
-                          onClick={handleCopy}
-                          disabled={exporting}
-                        >
-                          <Copy className="size-3.5" />
-                          {copied ? 'Copied!' : 'Copy to Clipboard'}
-                        </Button>
-                      )}
+                      <Button
+                        variant="outline"
+                        className="w-full"
+                        size="sm"
+                        onClick={handleCopy}
+                        disabled={exporting}
+                      >
+                        <Copy className="size-3.5" />
+                        {copied ? 'Copied!' : 'Copy to Clipboard'}
+                      </Button>
                       <Button
                         variant="outline"
                         size="sm"
@@ -1141,15 +1098,6 @@ export default function CallsPage() {
                         ZIP Bundle
                       </Button>
                     </div>
-
-                    <div className="flex gap-1 flex-wrap pt-1">
-                      <Button variant="ghost" size="xs" onClick={selectAll} className="h-6 text-xs">
-                        Select All
-                      </Button>
-                      <Button variant="ghost" size="xs" onClick={deselectAll} className="h-6 text-xs">
-                        Deselect All
-                      </Button>
-                    </div>
                   </div>
                 )}
               </>
@@ -1157,19 +1105,6 @@ export default function CallsPage() {
           </div>
         </aside>
       </div>
-
-      {/* Mobile export bar */}
-      {selectedIds.size > 0 && (
-        <div className="lg:hidden sticky bottom-0 bg-background border-t px-4 py-3 flex items-center gap-3">
-          <span className="text-sm font-medium flex-1">
-            {selectedIds.size} selected · ~{tokenEstimate.toLocaleString()} tokens
-          </span>
-          <Button size="sm" onClick={handleExport} disabled={exporting}>
-            {exporting ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-            Export
-          </Button>
-        </div>
-      )}
     </div>
   );
 }

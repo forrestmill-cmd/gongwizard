@@ -10,6 +10,7 @@ export interface GongCall {
   parties: GongParty[];
   topics: string[];
   trackers: string[];
+  trackerData?: GongTracker[];
   brief: string;
   keyPoints: string[];
   actionItems: string[];

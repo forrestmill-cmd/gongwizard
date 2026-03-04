@@ -353,7 +353,7 @@ export function buildUtteranceCSV(calls: CallForExport[], allCalls: any[]): stri
       (speakerId) => speakerMap.get(speakerId)?.isInternal ?? true
     );
 
-    const trackerOccs = extractTrackerOccurrences(rawCall.trackers || []);
+    const trackerOccs = extractTrackerOccurrences(rawCall.trackerData || []);
     alignTrackersToUtterances(utterances, trackerOccs);
 
     const outline: OutlineSection[] = (rawCall.outline || []).map((o: any) => ({

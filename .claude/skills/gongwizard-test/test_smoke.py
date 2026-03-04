@@ -137,6 +137,11 @@ def run():
 
         # ── 5. Transcript search ───────────────────────────────────────────────
         print("\n[5] Transcript search")
+        # Transcript search is behind a toggle button — click it first
+        toggle_btn = page.locator("button:has-text('Search transcripts')")
+        if toggle_btn.count() > 0:
+            toggle_btn.first.click()
+            page.wait_for_timeout(500)
         search_input = page.locator("input[placeholder*='transcript' i], input[placeholder*='Search transcripts' i]")
         check("Search transcripts input visible", search_input.count() > 0)
 

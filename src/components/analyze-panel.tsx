@@ -181,7 +181,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
             brief: c.brief,
             keyPoints: c.keyPoints,
             outline: c.outline,
-            trackers: c.trackers,
+            trackers: c.trackerData || [],
             topics: c.topics,
             talkRatio: c.talkRatio,
           })),
@@ -298,7 +298,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
 
         // Build utterances + align trackers
         const utterances = buildUtterances(monologues, speakerClassifier);
-        const trackerOccs = extractTrackerOccurrences(call.trackers || []);
+        const trackerOccs = extractTrackerOccurrences(call.trackerData || []);
         alignTrackersToUtterances(utterances, trackerOccs);
 
         // Perform surgery

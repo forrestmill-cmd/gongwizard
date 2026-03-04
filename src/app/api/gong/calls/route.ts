@@ -60,7 +60,8 @@ function normalizeExtensiveCall(c: any): Record<string, any> {
     direction: c.metaData?.direction,
     parties: c.parties || [],
     topics: (c.content?.topics || []).map((t: any) => t.name || t),
-    trackers: (c.content?.trackers || []).map((t: any) => ({
+    trackers: (c.content?.trackers || []).map((t: any) => t.name || ''),
+    trackerData: (c.content?.trackers || []).map((t: any) => ({
       ...t,
       occurrences: (t.occurrences || []).map((o: any) => ({
         ...o,
@@ -196,6 +197,7 @@ export async function POST(request: NextRequest) {
                 content: {
                   topics: true,
                   trackers: true,
+                  trackerOccurrences: true,
                   brief: true,
                   keyPoints: true,
                   actionItems: true,
