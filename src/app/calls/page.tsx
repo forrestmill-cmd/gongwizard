@@ -602,7 +602,11 @@ export default function CallsPage() {
       {/* Top bar */}
       <header className="bg-background border-b px-4 py-3 flex items-center gap-4 shrink-0">
         <span className="font-bold text-base tracking-tight">GongWizard</span>
-        <span className="text-sm text-muted-foreground">Last 90 days</span>
+        <span className="text-sm text-muted-foreground">
+          {session?.fromDate && session?.toDate
+            ? `${new Date(session.fromDate).toLocaleDateString()} – ${new Date(session.toDate).toLocaleDateString()}`
+            : 'Last 90 days'}
+        </span>
         <div className="flex-1" />
         <Button variant="ghost" size="sm" onClick={disconnect} className="text-muted-foreground">
           <LogOut className="size-4" />

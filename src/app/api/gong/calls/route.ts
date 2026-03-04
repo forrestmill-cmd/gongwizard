@@ -295,7 +295,7 @@ export async function POST(request: NextRequest) {
           emit({ type: 'calls', calls: fallback });
         }
 
-        emit({ type: 'done', totalCalls: callsProcessed || basicCalls.length });
+        emit({ type: 'done', totalCalls: callsProcessed ?? basicCalls.length });
       } catch (err) {
         console.error('Gong API error:', err);
         const message = err instanceof GongApiError

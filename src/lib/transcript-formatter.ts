@@ -66,7 +66,7 @@ export function groupTranscriptTurns(
     const spk = speakerMap.get(current.speakerId);
     const firstName = spk?.firstName || spk?.name?.split(' ')[0] || 'Unknown';
     const isInternal = spk?.isInternal ?? true;
-    const ts = formatTimestamp(current.sentences[0].start);
+    const ts = formatTimestamp(current.sentences[0].start * 1000); // Gong sentence.start is seconds
     const text = current.sentences.map((s) => s.text).join(' ');
     turns.push({ speakerId: current.speakerId, firstName, isInternal, timestamp: ts, text });
   }
