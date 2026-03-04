@@ -90,6 +90,7 @@ function buildDateChunks(fromDate: string, toDate: string): Array<{ from: string
   while (current <= end) {
     const chunkEnd = new Date(current);
     chunkEnd.setDate(chunkEnd.getDate() + CHUNK_DAYS - 1);
+    // Note: setHours operates in local time but ISO conversion is UTC — this works correctly only when the server runs in UTC (Vercel default)
     chunkEnd.setHours(23, 59, 59, 999);
 
     const actualEnd = chunkEnd <= end ? chunkEnd : end;
@@ -198,7 +199,6 @@ export async function POST(request: NextRequest) {
                   brief: true,
                   keyPoints: true,
                   actionItems: true,
-                  outline: true,
                   structure: true,
                   interactionStats: true,
                   questions: true,

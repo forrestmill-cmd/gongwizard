@@ -5,12 +5,11 @@ export function estimateTokens(text: string): number {
 }
 
 export function contextLabel(tokens: number): string {
-  if (tokens < 8000) return 'Fits GPT-3.5 (8K)';
-  if (tokens < 16000) return 'Fits Claude Haiku (16K)';
-  if (tokens < 32000) return 'Fits ChatGPT Plus (32K)';
-  if (tokens < 128000) return 'Fits GPT-4o / Claude (128K)';
-  if (tokens < 200000) return 'Fits Claude (200K)';
-  return 'Exceeds most context windows';
+  if (tokens < 8000) return 'Small (fits most models)';
+  if (tokens < 16000) return 'Medium (GPT-4, Claude Haiku)';
+  if (tokens < 128000) return 'Large (GPT-4 Turbo, Claude Opus)';
+  if (tokens < 200000) return 'Very large (Claude Sonnet, Gemini)';
+  return 'Exceeds typical context windows';
 }
 
 export function contextColor(tokens: number): string {
