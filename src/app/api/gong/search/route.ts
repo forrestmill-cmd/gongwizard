@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
                     type: 'match',
                     callId: ct.callId,
                     speakerId: monologue.speakerId,
-                    timestamp: formatTimestamp(sentence.start), // sentence.start is milliseconds
+                    timestamp: formatTimestamp(sentence.start * 1000), // sentence.start is seconds; convert to ms for formatTimestamp
                     text: sentence.text,
                     context: sentences[j - 1]?.text ?? '',
                   });

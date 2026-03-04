@@ -22,6 +22,7 @@ import { performSurgery, formatExcerptsForAnalysis } from '@/lib/transcript-surg
 
 // ─── Inline token utilities (safe for client components) ────────────────────
 
+// 800K leaves headroom for system prompt + output within Gemini 2.5 Pro's ~1M token context window
 const TOKEN_BUDGET = 800_000;
 const MAX_QUESTIONS = 5;
 
@@ -260,45 +261,41 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         const callDate = call.started?.split('T')[0] || '';
         const callTitle = call.title || sc.callId;
 
-        // Build speaker classifier
+        // Build speaker classifier, speaker map, and speaker directory in one pass
         const speakerInternalMap = new Map<string, boolean>();
-        for (const p of parties) {
-          const id = p.speakerId || p.userId || p.id;
-          if (id) speakerInternalMap.set(id, isInternalParty(p, internalDomains));
-        }
-        const speakerClassifier = (speakerId: string) => speakerInternalMap.get(speakerId) ?? true;
-
-        // Build speaker map for name/title resolution in transcript surgery
         const speakerMap: Record<string, { name: string; title: string }> = {};
+        const speakerDirectoryRaw: Array<{ speakerId: string; name: string; jobTitle: string; company: string; isInternal: boolean }> = [];
+        const isExternal = (p: any) => !isInternalParty(p, internalDomains);
         for (const p of parties) {
           const id = p.speakerId || p.userId || p.id;
-          if (id && p.name) {
-            speakerMap[id] = { name: p.name, title: p.title || p.jobTitle || '' };
-          }
-        }
-
-        // Build speaker directory for attribution (passed to run route)
-        const isExternal = (p: any) => !isInternalParty(p, internalDomains);
-        const speakerDirectory = parties
-          .map((p: any) => {
+          if (id) {
+            const internal = isInternalParty(p, internalDomains);
+            speakerInternalMap.set(id, internal);
+            if (p.name) {
+              speakerMap[id] = { name: p.name, title: p.title || p.jobTitle || '' };
+            }
             const affiliation = p.affiliation || p.company || '';
             // Gong often leaves affiliation empty or as "External" for prospects.
             // Fall back to the call's account name for external speakers.
             const company =
               affiliation && affiliation.toLowerCase() !== 'external'
                 ? affiliation
-                : isExternal(p)
+                : !internal
                 ? call.accountName || affiliation
                 : affiliation;
-            return {
-              speakerId: p.speakerId || p.userId || p.id,
-              name: p.name || '',
-              jobTitle: p.title || p.jobTitle || '',
-              company,
-              isInternal: isInternalParty(p, internalDomains),
-            };
-          })
-          .filter((s: any) => s.speakerId && s.name);
+            if (p.name) {
+              speakerDirectoryRaw.push({
+                speakerId: id,
+                name: p.name,
+                jobTitle: p.title || p.jobTitle || '',
+                company,
+                isInternal: internal,
+              });
+            }
+          }
+        }
+        const speakerDirectory = speakerDirectoryRaw;
+        const speakerClassifier = (speakerId: string) => speakerInternalMap.get(speakerId) ?? true;
 
         // Build utterances + align trackers
         const utterances = buildUtterances(monologues, speakerClassifier);
@@ -351,7 +348,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
           trackerNames,
           surgery.sectionsUsed,
           call.keyPoints || [],
-          true  // externalOnly — Gong AI outline items replace internal speaker text
+          true  // externalOnly=true: internal rep utterances are excluded; Gong AI outline items serve as proxy for internal content
         );
 
         // Prepend speaker directory to processed data for follow-up context
@@ -370,14 +367,6 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         allProcessedData.push(enrichedCallData);
         totalTokens += estimateInputTokens(enrichedCallData);
 
-        // Budget check
-        if (totalTokens > TOKEN_BUDGET) {
-          setError(
-            `Token budget exceeded (${totalTokens.toLocaleString()} / ${TOKEN_BUDGET.toLocaleString()}). Analysis stopped.`
-          );
-          break;
-        }
-
         callPayloads.push({
           callId: sc.callId,
           callData: enrichedCallData,
@@ -385,6 +374,14 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
           speakerDirectory,
           callMeta: { title: callTitle, date: callDate },
         });
+
+        // Budget check
+        if (totalTokens > TOKEN_BUDGET) {
+          setError(
+            `Token budget exceeded (${totalTokens.toLocaleString()} / ${TOKEN_BUDGET.toLocaleString()}). Analysis stopped.`
+          );
+          break;
+        }
       }
 
       // Step 2b: Single batch request for all calls
@@ -406,6 +403,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
       }));
 
       setCallFindings(allCallFindings);
+      // Cache raw processed transcript text separately — follow-up Q&A needs the full evidence, not just the structured findings
       setProcessedDataCache(allProcessedData.join('\n\n---\n\n'));
 
       // Step 3: Synthesize into a direct answer with sourced quotes
@@ -466,7 +464,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) throw new Error(data.error || 'Follow-up request failed');
 
       const newEntry: QAEntry = {
         question: followUpInput,
@@ -551,6 +549,8 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
       </div>
     );
   }
+
+  const selectedCount = scoredCalls.filter(s => s.selected).length;
 
   return (
     <div className="space-y-4">
@@ -674,7 +674,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
 
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span>
-              {scoredCalls.filter(s => s.selected).length} of {scoredCalls.length} calls selected
+              {selectedCount} of {scoredCalls.length} calls selected
             </span>
           </div>
 
@@ -682,10 +682,10 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
             className="w-full"
             size="sm"
             onClick={handleAnalyze}
-            disabled={scoredCalls.filter(s => s.selected).length === 0}
+            disabled={selectedCount === 0}
           >
             <Sparkles className="size-3.5" />
-            Analyze {scoredCalls.filter(s => s.selected).length} Calls
+            Analyze {selectedCount} Calls
           </Button>
         </div>
       )}

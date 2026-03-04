@@ -9,7 +9,7 @@ export interface GongCall {
   direction?: string;
   parties: GongParty[];
   topics: string[];
-  trackers: GongTracker[];
+  trackers: string[];
   brief: string;
   keyPoints: string[];
   actionItems: string[];
@@ -20,6 +20,9 @@ export interface GongCall {
   accountName: string;
   accountIndustry: string;
   accountWebsite: string;
+  internalSpeakerCount: number;
+  externalSpeakerCount: number;
+  talkRatio?: number;
 }
 
 export interface GongParty {

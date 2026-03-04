@@ -6,10 +6,8 @@ export function middleware(request: NextRequest) {
 
   if (
     pathname.startsWith('/gate') ||
-    // Only /api/auth and /api/gong/ are excluded — they use X-Gong-Auth or set the cookie themselves
+    // Only /api/auth is excluded — it sets the cookie itself
     pathname.startsWith('/api/auth') ||
-    pathname.startsWith('/api/gong/') ||
-    pathname.startsWith('/_next/') ||
     pathname.startsWith('/favicon')
   ) {
     return NextResponse.next();

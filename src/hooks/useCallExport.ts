@@ -13,11 +13,12 @@ import {
   type CallForExport,
   type ExportOptions,
 } from '@/lib/transcript-formatter';
+import type { GongSession, GongCall } from '@/types/gong';
 
 interface UseCallExportParams {
   selectedIds: Set<string>;
-  session: any;
-  calls: any[];
+  session: GongSession;
+  calls: GongCall[];
   exportFormat: 'markdown' | 'xml' | 'jsonl' | 'csv' | 'utterance-csv';
   exportOpts: ExportOptions;
 }
@@ -136,7 +137,14 @@ export function useCallExport({
     try {
       const callsForExport = await fetchTranscriptsForSelected();
       const exportDate = new Date();
-      const { extension } = buildExportContent([], exportFormat, exportOpts, calls);
+      const extensionMap: Record<string, string> = {
+        markdown: 'md',
+        xml: 'xml',
+        jsonl: 'jsonl',
+        'summary-csv': 'csv',
+        'utterance-csv': 'csv',
+      };
+      const extension = extensionMap[exportFormat] ?? 'txt';
 
       const fileEntries: { name: string; lastModified: Date; input: string }[] = [];
 

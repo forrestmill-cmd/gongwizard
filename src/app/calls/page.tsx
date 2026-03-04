@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format, subDays } from 'date-fns';
-import { estimateTokens, contextLabel, contextColor } from '@/lib/token-utils';
+import { contextLabel, contextColor } from '@/lib/token-utils';
 import { formatDuration, isInternalParty, truncateToFirstSentence } from '@/lib/format-utils';
 import {
   matchesTextSearch,
@@ -45,32 +45,18 @@ import { type ExportOptions } from '@/lib/transcript-formatter';
 import { useCallExport } from '@/hooks/useCallExport';
 import { useFilterState } from '@/hooks/useFilterState';
 import { getSession } from '@/lib/session';
+import { GongCall } from '@/types/gong';
 
 const WORDS_PER_CALL_MINUTE = 130;
 const WORDS_TO_TOKENS_RATIO = 1.3;
 
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-interface GongCall {
-  id: string;
-  title: string;
-  started: string;
-  duration: number;
-  accountName?: string;
-  topics?: string[];
-  trackers?: string[];
-  brief?: string;
-  parties?: any[];
-  interactionStats?: any;
-  internalSpeakerCount: number;
-  externalSpeakerCount: number;
-  talkRatio?: number;
-  keyPoints?: string[];
-  actionItems?: string[];
-  outline?: Array<{ name: string; startTimeMs: number; durationMs: number; items?: Array<{ text: string; startTimeMs: number; durationMs: number }> }>;
-  questions?: any[];
-  url?: string;
-}
+const FORMAT_OPTIONS = [
+  { value: 'markdown',      label: 'Markdown',      desc: 'Upload to ChatGPT or Claude' },
+  { value: 'xml',           label: 'XML',           desc: 'Structured format for Claude API' },
+  { value: 'jsonl',         label: 'JSONL',         desc: 'One object per call, structured' },
+  { value: 'csv',           label: 'CSV Summary',   desc: '1 row per call · Excel / BI tools' },
+  { value: 'utterance-csv', label: 'Utterance CSV', desc: '1 row per turn · Clay / Zapier' },
+] as const;
 
 interface TranscriptMatch {
   callId: string;
@@ -297,7 +283,7 @@ export default function CallsPage() {
       setIsSearchingTranscripts(false);
       setSearchMatches(new Map());
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // calls in deps: reset search state when the call list changes (e.g., after reload)
   }, [
     filters.searchText,
     filters.activeTrackers,
@@ -308,6 +294,7 @@ export default function CallsPage() {
     filters.participantSearch,
     filters.minExternalSpeakers,
     filters.aiContentSearch,
+    calls,
   ]);
 
   const allTrackers: string[] = useMemo(() => {
@@ -375,8 +362,9 @@ export default function CallsPage() {
     [calls, selectedIds]
   );
 
-  async function loadCalls() {
+  const loadCalls = useCallback(async () => {
     if (!session) return;
+    if (loading) return;
     setLoading(true);
     setLoadError('');
     setCalls([]);
@@ -417,12 +405,13 @@ export default function CallsPage() {
           else externalCount++;
         }
 
-        const trackerNames: string[] = [];
+        const trackerSet = new Set<string>();
         for (const t of call.trackers || []) {
           if (t.count != null && t.count <= 0) continue;
           const name = t.name || t.trackerName || t.id;
-          if (name) trackerNames.push(name);
+          if (name) trackerSet.add(name);
         }
+        const trackerNames = [...trackerSet];
 
         return {
           id: call.id,
@@ -453,7 +442,7 @@ export default function CallsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [session, fromDate, toDate, workspaceId, loading]);
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -482,7 +471,7 @@ export default function CallsPage() {
 
   async function runTranscriptSearch() {
     if (!session || !transcriptKeyword.trim()) return;
-    const ids = filteredCalls.map((c) => c.id).slice(0, 500);
+    const ids = filteredCalls.map((c) => c.id).slice(0, 500); // Cap at 500 to stay within transcript batch limits and keep search latency reasonable
 
     setIsSearchingTranscripts(true);
     setSearchMatches(new Map());
@@ -523,20 +512,25 @@ export default function CallsPage() {
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        buffer = lines.pop()!;
+        buffer = lines.pop() ?? '';
         for (const line of lines) {
           if (!line.trim()) continue;
-          const event = JSON.parse(line);
+          let event: { type: string; [key: string]: unknown };
+          try {
+            event = JSON.parse(line);
+          } catch {
+            continue;
+          }
           if (event.type === 'progress') {
             setSearchProgress({
-              searched: event.searched,
-              total: event.total,
-              matchCount: event.matchCount,
+              searched: event.searched as number,
+              total: event.total as number,
+              matchCount: event.matchCount as number,
             });
           } else if (event.type === 'match') {
             setSearchMatches((prev) => {
               const next = new Map(prev);
-              next.set(event.callId, [...(next.get(event.callId) || []), event]);
+              next.set(event.callId as string, [...(next.get(event.callId as string) || []), event as unknown as TranscriptMatch]);
               return next;
             });
           } else if (event.type === 'done') {
@@ -570,14 +564,6 @@ export default function CallsPage() {
       </div>
     );
   }
-
-  const FORMAT_OPTIONS = [
-    { value: 'markdown',      label: 'Markdown',      desc: 'Upload to ChatGPT or Claude' },
-    { value: 'xml',           label: 'XML',           desc: 'Structured format for Claude API' },
-    { value: 'jsonl',         label: 'JSONL',         desc: 'One object per call, structured' },
-    { value: 'csv',           label: 'CSV Summary',   desc: '1 row per call · Excel / BI tools' },
-    { value: 'utterance-csv', label: 'Utterance CSV', desc: '1 row per turn · Clay / Zapier' },
-  ] as const;
 
   return (
     <div className="min-h-screen bg-muted/30 flex flex-col">

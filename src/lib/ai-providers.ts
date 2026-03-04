@@ -24,7 +24,7 @@ export async function cheapComplete(prompt: string, options?: {
 }): Promise<string> {
   const gemini = getGemini();
   const response = await gemini.models.generateContent({
-    model: 'gemini-3.1-flash-lite-preview',
+    model: 'gemini-2.0-flash-lite',
     contents: prompt,
     config: {
       temperature: options?.temperature ?? 0.3,
@@ -43,7 +43,11 @@ export async function cheapCompleteJSON<T = unknown>(prompt: string, options?: {
 }): Promise<T> {
   const text = await cheapComplete(prompt, { ...options, jsonMode: true });
   if (!text) throw new Error('AI model returned empty response');
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`AI model returned invalid JSON: ${text.slice(0, 200)}`);
+  }
 }
 
 // ─── Smart tier: Gemini 2.5 Pro ─────────────────────────────────────────────
@@ -77,7 +81,11 @@ export async function smartCompleteJSON<T = unknown>(prompt: string, options?: {
 }): Promise<T> {
   const text = await smartComplete(prompt, { ...options, jsonMode: true });
   if (!text) throw new Error('AI model returned empty response');
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`AI model returned invalid JSON: ${text.slice(0, 200)}`);
+  }
 }
 
 // ─── Streaming smart completion ─────────────────────────────────────────────

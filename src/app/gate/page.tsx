@@ -34,7 +34,6 @@ export default function GatePage() {
       if (!res.ok) {
         const data = await res.json();
         setError(data.error || 'Incorrect password.');
-        setLoading(false);
         return;
       }
 
@@ -42,6 +41,7 @@ export default function GatePage() {
       router.refresh();
     } catch {
       setError('Network error. Please try again.');
+    } finally {
       setLoading(false);
     }
   }
