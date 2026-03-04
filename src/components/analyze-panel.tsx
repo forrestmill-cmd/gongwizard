@@ -534,7 +534,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         <ol className="space-y-2.5 text-xs text-muted-foreground">
           <li className="flex gap-2">
             <span className="text-primary font-bold shrink-0">1.</span>
-            Set a date range and load your calls
+            Your last 90 days of calls load automatically
           </li>
           <li className="flex gap-2">
             <span className="text-primary font-bold shrink-0">2.</span>

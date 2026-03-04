@@ -56,25 +56,20 @@ def run():
         page.screenshot(path='/tmp/gw_smoke_01_calls.png')
         check("Landed on /calls (not redirected to connect)", '/calls' in page.url)
 
-        # ── 2. Load Calls ─────────────────────────────────────────────────────
-        print("\n[2] Load calls")
-        load_btn = page.locator("button:has-text('Load My Calls')")
-        check("Load My Calls button visible", load_btn.count() > 0 and load_btn.first.is_visible())
-
-        if load_btn.count() > 0:
-            load_btn.first.click()
-            print("    Waiting for calls (up to 30s)…")
-            try:
-                page.wait_for_load_state('networkidle', timeout=30000)
-                time.sleep(8)  # Gong API takes several seconds
-            except Exception:
-                pass
-            page.screenshot(path='/tmp/gw_smoke_02_loaded.png', full_page=True)
+        # ── 2. Auto-load calls (last 90 days) ────────────────────────────────
+        print("\n[2] Auto-load calls")
+        print("    Waiting for calls to auto-load (up to 60s)…")
+        try:
+            page.wait_for_selector("button:has-text('Select All')", timeout=60000)
+            time.sleep(2)  # Let remaining batches stream in
+        except Exception:
+            pass
+        page.screenshot(path='/tmp/gw_smoke_02_loaded.png', full_page=True)
 
         # Count call cards by looking for Select All (appears once calls exist)
         select_all = page.locator("button:has-text('Select All')")
         calls_loaded = select_all.count() > 0
-        check("Calls loaded (Select All button present)", calls_loaded)
+        check("Calls auto-loaded (Select All button present)", calls_loaded)
 
         # ── 3. Select all + Export ─────────────────────────────────────────────
         print("\n[3] Export panel")
