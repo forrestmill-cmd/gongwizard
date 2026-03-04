@@ -103,9 +103,9 @@ Stateless — no database, credentials in sessionStorage only.
 - `src/lib/tracker-alignment.ts` — Aligns tracker occurrences to utterances; `buildUtterances`, `alignTrackersToUtterances`
 - `src/lib/filters.ts` — Pure filter predicates for call list: `matchesTextSearch`, `matchesTrackers`, `matchesTopics`, `matchesDurationRange`, `matchesTalkRatioRange`, `matchesParticipantName`, `matchesMinExternalSpeakers`, `matchesAiContentSearch`
 - `src/lib/session.ts` — Thin `sessionStorage` wrapper: `saveSession`, `getSession` for `gongwizard_session` key
-- `src/lib/format-utils.ts` — `formatDuration`, `formatTimestamp`, `isInternalParty`, `truncateToFirstSentence`
-- `src/lib/token-utils.ts` — `estimateTokens` (length/4), `contextLabel` (model name thresholds up to 200K), `contextColor`
-- `src/lib/browser-utils.ts` — `downloadFile` (ephemeral `<a>` + `URL.createObjectURL`)
+- `src/lib/format-utils.ts` — `formatDuration`, `formatTimestamp`, `isInternalParty`, `truncateToFirstSentence`, `escapeCSV`
+- `src/lib/token-utils.ts` — `estimateTokens` (length/4)
+- `src/lib/browser-utils.ts` — `downloadFile`, `downloadBlob` (ephemeral `<a>` + `URL.createObjectURL`)
 - `src/lib/utils.ts` — `cn()` utility (clsx + tailwind-merge)
 - `src/types/gong.ts` — All shared TypeScript interfaces: `GongCall`, `GongParty`, `GongSession`, `TranscriptMonologue`, `ScoredCall`, `AnalysisFinding`, `SynthesisTheme`, etc.
 
