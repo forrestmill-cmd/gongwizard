@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GongApiError, sleep, makeGongFetch, handleGongError, GONG_RATE_LIMIT_MS, EXTENSIVE_BATCH_SIZE } from '@/lib/gong-api';
+import { GongApiError, sleep, makeGongFetch, GONG_RATE_LIMIT_MS, EXTENSIVE_BATCH_SIZE } from '@/lib/gong-api';
 
-const MAX_DATE_RANGE_DAYS = 365; // Cap to prevent accidental multi-year queries
+const DEFAULT_DAYS = 90;
 const CHUNK_DAYS = 30; // Gong API performs best with ≤30-day windows
 
 // Extract values from Gong's nested context.objects.fields structure
@@ -91,7 +91,6 @@ function buildDateChunks(fromDate: string, toDate: string): Array<{ from: string
   while (current <= end) {
     const chunkEnd = new Date(current);
     chunkEnd.setDate(chunkEnd.getDate() + CHUNK_DAYS - 1);
-    // Note: setHours operates in local time but ISO conversion is UTC — this works correctly only when the server runs in UTC (Vercel default)
     chunkEnd.setHours(23, 59, 59, 999);
 
     const actualEnd = chunkEnd <= end ? chunkEnd : end;
@@ -111,167 +110,197 @@ function buildDateChunks(fromDate: string, toDate: string): Array<{ from: string
 }
 
 export async function POST(request: NextRequest) {
-  try {
-    const authHeader = request.headers.get('X-Gong-Auth');
-    if (!authHeader) {
-      return NextResponse.json({ error: 'Missing credentials' }, { status: 401 });
-    }
+  const authHeader = request.headers.get('X-Gong-Auth');
+  if (!authHeader) {
+    return NextResponse.json({ error: 'Missing credentials' }, { status: 401 });
+  }
 
-    const body = await request.json().catch(() => ({}));
-    const { fromDate, toDate, baseUrl: rawBaseUrl, workspaceId } = body;
+  const body = await request.json().catch(() => ({}));
+  const { baseUrl: rawBaseUrl, workspaceId } = body;
 
-    if (!fromDate || !toDate) {
-      return NextResponse.json({ error: 'fromDate and toDate are required' }, { status: 400 });
-    }
+  // Hardcode 90-day range
+  const now = new Date();
+  const from = new Date(now);
+  from.setDate(from.getDate() - DEFAULT_DAYS);
+  from.setHours(0, 0, 0, 0);
+  const toDate = now.toISOString();
+  const fromDate = from.toISOString();
 
-    const startMs = new Date(fromDate).getTime();
-    const endMs = new Date(toDate).getTime();
-    const rangeDays = (endMs - startMs) / (1000 * 60 * 60 * 24);
+  const baseUrl = (rawBaseUrl || 'https://api.gong.io').replace(/\/+$/, '');
+  const gongFetch = makeGongFetch(baseUrl, authHeader);
 
-    if (rangeDays > MAX_DATE_RANGE_DAYS) {
-      return NextResponse.json(
-        { error: `Date range exceeds maximum of ${MAX_DATE_RANGE_DAYS} days` },
-        { status: 400 }
-      );
-    }
-
-    const baseUrl = (rawBaseUrl || 'https://api.gong.io').replace(/\/+$/, '');
-    const gongFetch = makeGongFetch(baseUrl, authHeader);
-
-    // Step 1: Fetch all call IDs across 30-day chunks, dedup by call ID
-    const seenCallIds = new Set<string>();
-    const basicCalls: any[] = [];
-    const chunks = buildDateChunks(fromDate, toDate);
-
-    for (let ci = 0; ci < chunks.length; ci++) {
-      const chunk = chunks[ci];
-      let cursor: string | undefined;
-
-      do {
-        const params = new URLSearchParams({
-          fromDateTime: chunk.from,
-          toDateTime: chunk.to,
-        });
-        if (workspaceId) params.set('workspaceId', workspaceId);
-        if (cursor) params.set('cursor', cursor);
-
-        let data: any;
-        try {
-          data = await gongFetch(`/v2/calls?${params.toString()}`);
-        } catch (err) {
-          // Gong returns 404 "No calls found" when a date chunk has no calls — skip it
-          if (err instanceof GongApiError && err.status === 404) {
-            break;
-          }
-          throw err;
-        }
-        const page: any[] = data.calls || [];
-
-        for (const call of page) {
-          if (call.id && !seenCallIds.has(call.id)) {
-            seenCallIds.add(call.id);
-            basicCalls.push(call);
-          }
-        }
-
-        cursor = data?.records?.cursor;
-        if (cursor) await sleep(GONG_RATE_LIMIT_MS);
-      } while (cursor);
-
-      if (ci + 1 < chunks.length) await sleep(GONG_RATE_LIMIT_MS);
-    }
-
-    if (basicCalls.length === 0) {
-      return NextResponse.json({ calls: [] });
-    }
-
-    const callIds = basicCalls.map((c: any) => c.id).filter(Boolean);
-
-    // Step 2: Fetch extensive details in batches of 10
-    const extensiveCalls: any[] = [];
-    let extensiveFailed = false;
-
-    for (let i = 0; i < callIds.length; i += EXTENSIVE_BATCH_SIZE) {
-      const batch = callIds.slice(i, i + EXTENSIVE_BATCH_SIZE);
+  const stream = new ReadableStream({
+    async start(controller) {
+      const emit = (obj: object) =>
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(obj) + '\n'));
 
       try {
-        let batchCursor: string | undefined;
+        // Step 1: Fetch all call IDs across 30-day chunks, dedup by call ID
+        const seenCallIds = new Set<string>();
+        const basicCalls: any[] = [];
+        const chunks = buildDateChunks(fromDate, toDate);
 
-        do {
-          const reqBody: any = {
-            filter: { callIds: batch },
-            contentSelector: {
-              exposedFields: {
-                parties: true,
-                content: {
-                  topics: true,
-                  trackers: true,
-                  trackerOccurrences: true,
-                  brief: true,
-                  keyPoints: true,
-                  actionItems: true,
-                  structure: true,
-                  interactionStats: true,
-                  questions: true,
-                  publicComments: true,
-                },
-              },
-              context: 'Extended',
-            },
-          };
-          if (batchCursor) reqBody.cursor = batchCursor;
+        emit({ type: 'status', message: `Scanning ${chunks.length} date range${chunks.length > 1 ? 's' : ''}...` });
 
-          const data = await gongFetch('/v2/calls/extensive', {
-            method: 'POST',
-            body: JSON.stringify(reqBody),
+        for (let ci = 0; ci < chunks.length; ci++) {
+          const chunk = chunks[ci];
+          let cursor: string | undefined;
+
+          do {
+            const params = new URLSearchParams({
+              fromDateTime: chunk.from,
+              toDateTime: chunk.to,
+            });
+            if (workspaceId) params.set('workspaceId', workspaceId);
+            if (cursor) params.set('cursor', cursor);
+
+            let data: any;
+            try {
+              data = await gongFetch(`/v2/calls?${params.toString()}`);
+            } catch (err) {
+              // Gong returns 404 "No calls found" when a date chunk has no calls — skip it
+              if (err instanceof GongApiError && err.status === 404) {
+                break;
+              }
+              throw err;
+            }
+            const page: any[] = data.calls || [];
+
+            for (const call of page) {
+              if (call.id && !seenCallIds.has(call.id)) {
+                seenCallIds.add(call.id);
+                basicCalls.push(call);
+              }
+            }
+
+            cursor = data?.records?.cursor;
+            if (cursor) await sleep(GONG_RATE_LIMIT_MS);
+          } while (cursor);
+
+          emit({
+            type: 'status',
+            message: `Scanned range ${ci + 1}/${chunks.length} — ${basicCalls.length} call${basicCalls.length !== 1 ? 's' : ''} found`,
           });
 
-          const page = data.calls || [];
-          extensiveCalls.push(...page);
-
-          batchCursor = data?.records?.cursor;
-          if (batchCursor) await sleep(GONG_RATE_LIMIT_MS);
-        } while (batchCursor);
-
-      } catch (err) {
-        if (err instanceof GongApiError && err.status === 403) {
-          extensiveFailed = true;
-          break;
+          if (ci + 1 < chunks.length) await sleep(GONG_RATE_LIMIT_MS);
         }
-        throw err;
+
+        if (basicCalls.length === 0) {
+          emit({ type: 'done', totalCalls: 0 });
+          controller.close();
+          return;
+        }
+
+        const callIds = basicCalls.map((c: any) => c.id).filter(Boolean);
+        const totalBatches = Math.ceil(callIds.length / EXTENSIVE_BATCH_SIZE);
+
+        emit({ type: 'status', message: `Found ${callIds.length} calls. Loading details (${totalBatches} batches)...` });
+
+        // Step 2: Fetch extensive details in batches of 10, streaming each batch
+        let extensiveFailed = false;
+        let callsProcessed = 0;
+
+        for (let i = 0; i < callIds.length; i += EXTENSIVE_BATCH_SIZE) {
+          const batch = callIds.slice(i, i + EXTENSIVE_BATCH_SIZE);
+          const batchNum = Math.floor(i / EXTENSIVE_BATCH_SIZE) + 1;
+
+          try {
+            const batchExtensive: any[] = [];
+            let batchCursor: string | undefined;
+
+            do {
+              const reqBody: any = {
+                filter: { callIds: batch },
+                contentSelector: {
+                  exposedFields: {
+                    parties: true,
+                    content: {
+                      topics: true,
+                      trackers: true,
+                      trackerOccurrences: true,
+                      brief: true,
+                      keyPoints: true,
+                      actionItems: true,
+                      structure: true,
+                      interactionStats: true,
+                      questions: true,
+                      publicComments: true,
+                    },
+                  },
+                  context: 'Extended',
+                },
+              };
+              if (batchCursor) reqBody.cursor = batchCursor;
+
+              const data = await gongFetch('/v2/calls/extensive', {
+                method: 'POST',
+                body: JSON.stringify(reqBody),
+              });
+
+              const page = data.calls || [];
+              batchExtensive.push(...page);
+
+              batchCursor = data?.records?.cursor;
+              if (batchCursor) await sleep(GONG_RATE_LIMIT_MS);
+            } while (batchCursor);
+
+            const normalized = batchExtensive.map(normalizeExtensiveCall);
+            callsProcessed += normalized.length;
+
+            emit({ type: 'calls', calls: normalized });
+            emit({
+              type: 'progress',
+              batch: batchNum,
+              totalBatches,
+              callsProcessed,
+              totalCalls: callIds.length,
+            });
+
+          } catch (err) {
+            if (err instanceof GongApiError && err.status === 403) {
+              extensiveFailed = true;
+              break;
+            }
+            throw err;
+          }
+
+          if (i + EXTENSIVE_BATCH_SIZE < callIds.length) await sleep(GONG_RATE_LIMIT_MS);
+        }
+
+        // If extensive failed, fall back to basic data
+        if (extensiveFailed) {
+          console.warn('Extensive call data unavailable (403), falling back to basic call data');
+          const fallback = basicCalls.map((c: any) => ({
+            id: c.id,
+            title: c.title || 'Untitled Call',
+            started: c.started,
+            duration: c.duration || 0,
+            parties: [],
+            topics: [],
+            trackers: [],
+            brief: '',
+            outline: [],
+            questions: [],
+            interactionStats: null,
+            metaData: c,
+          }));
+          emit({ type: 'calls', calls: fallback });
+        }
+
+        emit({ type: 'done', totalCalls: callsProcessed || basicCalls.length });
+      } catch (err) {
+        console.error('Gong API error:', err);
+        const message = err instanceof GongApiError
+          ? `Gong API error (${err.status}): ${err.message}`
+          : err instanceof Error ? err.message : 'Internal server error';
+        emit({ type: 'error', message });
+      } finally {
+        controller.close();
       }
+    },
+  });
 
-      if (i + EXTENSIVE_BATCH_SIZE < callIds.length) await sleep(GONG_RATE_LIMIT_MS);
-    }
-
-    // Step 3: Normalize response shape
-    // Extensive calls have nested metaData/content/parties structure
-    // Basic calls have flat id/title/started/duration
-    // Normalize both to a consistent shape for the UI
-
-    if (extensiveFailed) {
-      console.warn('Extensive call data unavailable (403), falling back to basic call data');
-      const normalized = basicCalls.map((c: any) => ({
-        id: c.id,
-        title: c.title || 'Untitled Call',
-        started: c.started,
-        duration: c.duration || 0,
-        parties: [],
-        topics: [],
-        trackers: [],
-        brief: '',
-        outline: [],
-        questions: [],
-        interactionStats: null,
-        metaData: c,
-      }));
-      return NextResponse.json({ calls: normalized });
-    }
-
-    const normalized = extensiveCalls.map(normalizeExtensiveCall);
-    return NextResponse.json({ calls: normalized });
-
-  } catch (error) {
-    return handleGongError(error);
-  }
+  return new Response(stream, {
+    headers: { 'Content-Type': 'application/x-ndjson' },
+  });
 }

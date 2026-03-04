@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MultiSelect, type MultiSelectOption } from '@/components/ui/multi-select';
-import { format, subDays } from 'date-fns';
+import { format } from 'date-fns';
 import { formatDuration, isInternalParty, truncateToFirstSentence } from '@/lib/format-utils';
 import {
   matchesTextSearch,
@@ -206,14 +206,13 @@ export default function CallsPage() {
   const router = useRouter();
   const [session, setSession] = useState<any>(null);
 
-  const today = new Date();
-  const [fromDate, setFromDate] = useState(format(subDays(today, 30), 'yyyy-MM-dd'));
-  const [toDate, setToDate] = useState(format(today, 'yyyy-MM-dd'));
-
   const [calls, setCalls] = useState<GongCall[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [hasLoaded, setHasLoaded] = useState(false);
+  const [loadStatus, setLoadStatus] = useState('');
+  const [loadProgress, setLoadProgress] = useState<{ batch: number; totalBatches: number } | null>(null);
+  const [autoLoadTriggered, setAutoLoadTriggered] = useState(false);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [workspaceId, setWorkspaceId] = useState<string>('');
@@ -367,6 +366,8 @@ export default function CallsPage() {
     setCalls([]);
     setSelectedIds(new Set());
     setHasLoaded(false);
+    setLoadStatus('Connecting to Gong...');
+    setLoadProgress(null);
 
     try {
       const res = await fetch('/api/gong/calls', {
@@ -376,63 +377,110 @@ export default function CallsPage() {
           'X-Gong-Auth': session.authHeader,
         },
         body: JSON.stringify({
-          fromDate: `${fromDate}T00:00:00Z`,
-          toDate: `${toDate}T23:59:59Z`,
           baseUrl: session.baseUrl,
           ...(workspaceId ? { workspaceId } : {}),
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
         setLoadError(data.error || 'Failed to load calls.');
         setLoading(false);
         return;
       }
 
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
       const internalDomains: string[] = session.internalDomains || [];
 
-      const processed: GongCall[] = (data.calls || []).map((call: any) => {
-        const parties: any[] = call.parties || [];
-        let internalCount = 0;
-        let externalCount = 0;
-        for (const p of parties) {
-          const internal = isInternalParty(p, internalDomains);
-          if (internal) internalCount++;
-          else externalCount++;
+      function processCalls(rawCalls: any[]): GongCall[] {
+        return rawCalls.map((call: any) => {
+          const parties: any[] = call.parties || [];
+          let internalCount = 0;
+          let externalCount = 0;
+          for (const p of parties) {
+            if (isInternalParty(p, internalDomains)) internalCount++;
+            else externalCount++;
+          }
+          return {
+            id: call.id,
+            title: call.title || 'Untitled Call',
+            started: call.started,
+            duration: call.duration || 0,
+            accountName: call.metaData?.accountName || call.accountName || '',
+            topics: call.topics || [],
+            trackers: call.trackers || [],
+            trackerData: call.trackerData || [],
+            brief: call.brief || call.highlights?.brief || '',
+            parties,
+            interactionStats: call.interactionStats,
+            internalSpeakerCount: internalCount,
+            externalSpeakerCount: externalCount,
+            talkRatio: call.interactionStats?.talkRatio ?? undefined,
+            keyPoints: call.keyPoints || [],
+            actionItems: call.actionItems || [],
+            outline: call.outline || [],
+            questions: call.questions || [],
+            url: call.url,
+            context: call.context || [],
+            accountIndustry: call.accountIndustry || '',
+            accountWebsite: call.accountWebsite || '',
+          };
+        });
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let event: any;
+          try { event = JSON.parse(line); } catch { continue; }
+
+          switch (event.type) {
+            case 'status':
+              setLoadStatus(event.message);
+              break;
+            case 'progress':
+              setLoadProgress({ batch: event.batch, totalBatches: event.totalBatches });
+              setLoadStatus(`Loading details... ${event.callsProcessed}/${event.totalCalls} calls`);
+              break;
+            case 'calls': {
+              const processed = processCalls(event.calls || []);
+              setCalls(prev => [...prev, ...processed]);
+              break;
+            }
+            case 'done':
+              setHasLoaded(true);
+              setLoadStatus('');
+              break;
+            case 'error':
+              setLoadError(event.message);
+              break;
+          }
         }
-
-        return {
-          id: call.id,
-          title: call.title || 'Untitled Call',
-          started: call.started,
-          duration: call.duration || 0,
-          accountName: call.metaData?.accountName || call.accountName || '',
-          topics: call.topics || [],
-          trackers: call.trackers || [],
-          trackerData: call.trackerData || [],
-          brief: call.brief || call.highlights?.brief || '',
-          parties,
-          interactionStats: call.interactionStats,
-          internalSpeakerCount: internalCount,
-          externalSpeakerCount: externalCount,
-          talkRatio: call.interactionStats?.talkRatio ?? undefined,
-          keyPoints: call.keyPoints || [],
-          actionItems: call.actionItems || [],
-          outline: call.outline || [],
-          questions: call.questions || [],
-          url: call.url,
-        };
-      });
-
-      setCalls(processed);
-      setHasLoaded(true);
+      }
     } catch (err: unknown) {
       setLoadError(err instanceof Error ? err.message : 'Network error loading calls.');
     } finally {
       setLoading(false);
+      setLoadStatus('');
+      setLoadProgress(null);
     }
-  }, [session, fromDate, toDate, workspaceId, loading]);
+  }, [session, workspaceId, loading]);
+
+  // Auto-load calls once session is available
+  useEffect(() => {
+    if (session && !autoLoadTriggered && !hasLoaded && !loading) {
+      setAutoLoadTriggered(true);
+      loadCalls();
+    }
+  }, [session, autoLoadTriggered, hasLoaded, loading, loadCalls]);
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -552,42 +600,8 @@ export default function CallsPage() {
       {/* Top bar */}
       <header className="bg-background border-b px-4 py-3 flex items-center gap-4 shrink-0">
         <span className="font-bold text-base tracking-tight">GongWizard</span>
-        <div className="flex-1 flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-2">
-            <Label htmlFor="fromDate" className="text-sm whitespace-nowrap text-muted-foreground">
-              From
-            </Label>
-            <Input
-              id="fromDate"
-              type="date"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-              className="h-8 w-36 text-sm"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <Label htmlFor="toDate" className="text-sm whitespace-nowrap text-muted-foreground">
-              To
-            </Label>
-            <Input
-              id="toDate"
-              type="date"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-              className="h-8 w-36 text-sm"
-            />
-          </div>
-          <Button size="sm" onClick={loadCalls} disabled={loading}>
-            {loading ? (
-              <>
-                <Loader2 className="size-3.5 animate-spin" />
-                Loading…
-              </>
-            ) : (
-              'Load My Calls'
-            )}
-          </Button>
-        </div>
+        <span className="text-sm text-muted-foreground">Last 90 days</span>
+        <div className="flex-1" />
         <Button variant="ghost" size="sm" onClick={disconnect} className="text-muted-foreground">
           <LogOut className="size-4" />
           Disconnect
@@ -892,41 +906,47 @@ export default function CallsPage() {
               </div>
             )}
 
-            {loading && (
+            {loading && calls.length === 0 && (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-3">
                 <Loader2 className="size-8 animate-spin" />
-                <p className="text-sm">Loading calls from Gong…</p>
+                <p className="text-sm font-medium">{loadStatus || 'Loading calls from Gong...'}</p>
+                {loadProgress && loadProgress.totalBatches > 1 && (
+                  <div className="w-48 h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary rounded-full transition-all duration-300"
+                      style={{ width: `${(loadProgress.batch / loadProgress.totalBatches) * 100}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {loading && calls.length > 0 && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
+                <Loader2 className="size-4 animate-spin" />
+                <span>{loadStatus || 'Loading more calls...'}</span>
+                {loadProgress && loadProgress.totalBatches > 1 && (
+                  <div className="w-24 h-1 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary rounded-full transition-all duration-300"
+                      style={{ width: `${(loadProgress.batch / loadProgress.totalBatches) * 100}%` }}
+                    />
+                  </div>
+                )}
               </div>
             )}
 
             {!loading && !hasLoaded && !loadError && (
-              <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-4 max-w-sm mx-auto text-center">
-                <p className="text-sm font-medium text-foreground">Get started</p>
-                <ol className="text-sm space-y-2 text-left list-none">
-                  <li className="flex gap-2">
-                    <span className="text-primary font-semibold shrink-0">1.</span>
-                    <span>Enter a date range and load your calls</span>
-                  </li>
-                  <li className="flex gap-2">
-                    <span className="text-primary font-semibold shrink-0">2.</span>
-                    <span>Filter by trackers, topics, or search</span>
-                  </li>
-                  <li className="flex gap-2">
-                    <span className="text-primary font-semibold shrink-0">3.</span>
-                    <span>Select the calls you want to analyze</span>
-                  </li>
-                  <li className="flex gap-2">
-                    <span className="text-primary font-semibold shrink-0">4.</span>
-                    <span>Run AI analysis or export transcript data</span>
-                  </li>
-                </ol>
+              <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-2">
+                <Loader2 className="size-6 animate-spin" />
+                <p className="text-sm">Preparing...</p>
               </div>
             )}
 
             {!loading && hasLoaded && filteredCalls.length === 0 && (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-2">
                 <p className="text-sm font-medium">No calls found</p>
-                <p className="text-xs">Try adjusting your date range or filters</p>
+                <p className="text-xs">No calls found in the last 90 days. Try adjusting your filters.</p>
               </div>
             )}
 

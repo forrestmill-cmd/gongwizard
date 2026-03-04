@@ -64,7 +64,7 @@ export function makeGongFetch(baseUrl: string, authHeader: string) {
         console.warn(`Gong API error ${response.status} on ${endpoint}, attempt ${attempt + 1}/${MAX_RETRIES}, retrying in ${delayMs}ms`);
         await sleep(delayMs);
       } catch (err) {
-        if (err instanceof GongApiError && (err.status === 401 || err.status === 403)) {
+        if (err instanceof GongApiError && (err.status === 401 || err.status === 403 || err.status === 404)) {
           throw err;
         }
         lastError = err;
