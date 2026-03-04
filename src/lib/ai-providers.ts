@@ -15,7 +15,7 @@ function getGemini(): GoogleGenAI {
   return _gemini;
 }
 
-// ─── Cheap tier: Gemini Flash-Lite ──────────────────────────────────────────
+// ─── Cheap tier: Gemini 2.5 Flash-Lite ─────────────────────────────────────
 
 export async function cheapComplete(prompt: string, options?: {
   temperature?: number;
@@ -24,7 +24,7 @@ export async function cheapComplete(prompt: string, options?: {
 }): Promise<string> {
   const gemini = getGemini();
   const response = await gemini.models.generateContent({
-    model: 'gemini-2.0-flash-lite',
+    model: 'gemini-2.5-flash-lite',
     contents: prompt,
     config: {
       temperature: options?.temperature ?? 0.3,
