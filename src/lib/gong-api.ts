@@ -20,7 +20,7 @@ export const GONG_RATE_LIMIT_MS = 350;
 // Gong API limits: /v2/calls/extensive accepts max 10 IDs, /v2/calls/transcript accepts max 50
 export const EXTENSIVE_BATCH_SIZE = 10;
 export const TRANSCRIPT_BATCH_SIZE = 50;
-export const MAX_RETRIES = 5;
+const MAX_RETRIES = 5;
 
 export function makeGongFetch(baseUrl: string, authHeader: string) {
   const retryDelayMs = (attempt: number) => Math.min(2 ** attempt * 2, 30) * 1000;

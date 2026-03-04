@@ -4,7 +4,7 @@ import { useState, useCallback } from 'react';
 import { format } from 'date-fns';
 import { downloadZip } from 'client-zip';
 import { isInternalParty } from '@/lib/format-utils';
-import { downloadFile } from '@/lib/browser-utils';
+import { downloadFile, downloadBlob } from '@/lib/browser-utils';
 import {
   groupTranscriptTurns,
   buildExportContent,
@@ -175,12 +175,7 @@ export function useCallExport({
       ];
 
       const blob = await downloadZip(files).blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `gong-export-${format(exportDate, 'yyyy-MM-dd')}.zip`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `gong-export-${format(exportDate, 'yyyy-MM-dd')}.zip`);
     } catch (err: any) {
       alert(err.message || 'ZIP export failed');
     } finally {

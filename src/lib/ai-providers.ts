@@ -17,7 +17,7 @@ function getGemini(): GoogleGenAI {
 
 // ─── Cheap tier: Gemini 2.5 Flash-Lite ─────────────────────────────────────
 
-export async function cheapComplete(prompt: string, options?: {
+async function cheapComplete(prompt: string, options?: {
   temperature?: number;
   maxTokens?: number;
   jsonMode?: boolean;
@@ -42,7 +42,6 @@ export async function cheapCompleteJSON<T = unknown>(prompt: string, options?: {
   maxTokens?: number;
 }): Promise<T> {
   const text = await cheapComplete(prompt, { ...options, jsonMode: true });
-  if (!text) throw new Error('AI model returned empty response');
   try {
     return JSON.parse(text);
   } catch {
@@ -52,7 +51,7 @@ export async function cheapCompleteJSON<T = unknown>(prompt: string, options?: {
 
 // ─── Smart tier: Gemini 2.5 Pro ─────────────────────────────────────────────
 
-export async function smartComplete(prompt: string, options?: {
+async function smartComplete(prompt: string, options?: {
   temperature?: number;
   maxTokens?: number;
   systemPrompt?: string;
@@ -80,7 +79,6 @@ export async function smartCompleteJSON<T = unknown>(prompt: string, options?: {
   systemPrompt?: string;
 }): Promise<T> {
   const text = await smartComplete(prompt, { ...options, jsonMode: true });
-  if (!text) throw new Error('AI model returned empty response');
   try {
     return JSON.parse(text);
   } catch {

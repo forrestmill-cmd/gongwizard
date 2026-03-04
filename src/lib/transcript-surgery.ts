@@ -2,6 +2,7 @@
 // Reduces ~16K tokens/call to ~2-3K of analysis-ready input
 
 import type { Utterance } from './tracker-alignment';
+import { formatTimestamp } from './format-utils';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -59,15 +60,6 @@ function isGreetingOrClosing(timestampMs: number, callDurationMs: number, text: 
   if (wordCount >= 15) return false;
   // First or last 60 seconds
   return timestampMs < GREETING_CLOSING_WINDOW_MS || timestampMs > (callDurationMs - GREETING_CLOSING_WINDOW_MS);
-}
-
-// ─── Timestamp formatting ───────────────────────────────────────────────────
-
-function formatMs(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const min = Math.floor(totalSeconds / 60);
-  const sec = totalSeconds % 60;
-  return `${min}:${sec.toString().padStart(2, '0')}`;
 }
 
 // ─── Chapter index ──────────────────────────────────────────────────────────
@@ -217,7 +209,7 @@ export function performSurgery(
       speakerId: u.speakerId,
       text: u.text,
       timestampMs: u.startTimeMs,
-      timestampFormatted: formatMs(u.startTimeMs),
+      timestampFormatted: formatTimestamp(u.startTimeMs),
       isInternal: u.isInternal,
       trackers: [...u.trackers],
       sectionName: sectionName || undefined,

@@ -1,7 +1,7 @@
 // Transcript formatting and export builders
 
 import { estimateTokens } from './token-utils';
-import { formatDuration, formatTimestamp } from './format-utils';
+import { formatDuration, formatTimestamp, escapeCSV } from './format-utils';
 import { buildUtterances, alignTrackersToUtterances, extractTrackerOccurrences } from './tracker-alignment';
 import { findNearestOutlineItem, type OutlineSection } from './transcript-surgery';
 
@@ -255,13 +255,6 @@ export function buildJSONL(calls: CallForExport[], opts: ExportOptions): string 
       return JSON.stringify(obj);
     })
     .join('\n');
-}
-
-function escapeCSV(val: string): string {
-  if (val.includes(',') || val.includes('"') || val.includes('\n')) {
-    return '"' + val.replace(/"/g, '""') + '"';
-  }
-  return val;
 }
 
 export function buildCSVSummary(calls: CallForExport[], allCalls: any[]): string {

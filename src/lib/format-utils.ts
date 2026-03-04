@@ -23,6 +23,13 @@ export function formatTimestamp(ms: number): string {
   return `${min}:${sec.toString().padStart(2, '0')}`;
 }
 
+export function escapeCSV(val: string): string {
+  if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+    return '"' + val.replace(/"/g, '""') + '"';
+  }
+  return val;
+}
+
 export function truncateToFirstSentence(text: string, maxChars = 120): string {
   if (!text) return '';
   const sentenceEnd = text.indexOf('. ');

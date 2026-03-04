@@ -16,19 +16,15 @@ import {
   Send,
   Download,
 } from 'lucide-react';
-import { isInternalParty } from '@/lib/format-utils';
+import { isInternalParty, escapeCSV } from '@/lib/format-utils';
+import { downloadFile } from '@/lib/browser-utils';
+import { estimateTokens } from '@/lib/token-utils';
 import { buildUtterances, alignTrackersToUtterances, extractTrackerOccurrences } from '@/lib/tracker-alignment';
 import { performSurgery, formatExcerptsForAnalysis } from '@/lib/transcript-surgery';
-
-// ─── Inline token utilities (safe for client components) ────────────────────
 
 // 800K leaves headroom for system prompt + output within Gemini 2.5 Pro's ~1M token context window
 const TOKEN_BUDGET = 800_000;
 const MAX_QUESTIONS = 5;
-
-function estimateInputTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -83,25 +79,6 @@ interface AnalyzePanelProps {
   selectedCalls: any[];
   session: any;
   allCalls: any[];
-}
-
-// ─── Export helpers ─────────────────────────────────────────────────────────
-
-function escapeCSV(val: string): string {
-  if (val.includes(',') || val.includes('"') || val.includes('\n')) {
-    return '"' + val.replace(/"/g, '""') + '"';
-  }
-  return val;
-}
-
-function downloadBlob(content: string, filename: string, mimeType: string) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
 }
 
 // ─── Template shortcuts ─────────────────────────────────────────────────────
@@ -264,7 +241,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         // Build speaker classifier, speaker map, and speaker directory in one pass
         const speakerInternalMap = new Map<string, boolean>();
         const speakerMap: Record<string, { name: string; title: string }> = {};
-        const speakerDirectoryRaw: Array<{ speakerId: string; name: string; jobTitle: string; company: string; isInternal: boolean }> = [];
+        const speakerDirectory: Array<{ speakerId: string; name: string; jobTitle: string; company: string; isInternal: boolean }> = [];
         for (const p of parties) {
           const id = p.speakerId || p.userId || p.id;
           if (id) {
@@ -283,7 +260,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
                 ? call.accountName || affiliation
                 : affiliation;
             if (p.name) {
-              speakerDirectoryRaw.push({
+              speakerDirectory.push({
                 speakerId: id,
                 name: p.name,
                 jobTitle: p.title || p.jobTitle || '',
@@ -293,7 +270,6 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
             }
           }
         }
-        const speakerDirectory = speakerDirectoryRaw;
         const speakerClassifier = (speakerId: string) => speakerInternalMap.get(speakerId) ?? true;
 
         // Build utterances + align trackers
@@ -364,7 +340,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
 
         const enrichedCallData = `${speakerHeader}${callDataStr}`;
         allProcessedData.push(enrichedCallData);
-        totalTokens += estimateInputTokens(enrichedCallData);
+        totalTokens += estimateTokens(enrichedCallData);
 
         callPayloads.push({
           callId: sc.callId,
@@ -484,7 +460,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
   const handleExportJSON = () => {
     const exportDate = new Date().toISOString().split('T')[0];
     const payload = { exportDate, conversation };
-    downloadBlob(
+    downloadFile(
       JSON.stringify(payload, null, 2),
       `gongwizard-analysis-${exportDate}.json`,
       'application/json'
@@ -506,7 +482,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
     );
     const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
     const exportDate = new Date().toISOString().split('T')[0];
-    downloadBlob(csv, `gongwizard-analysis-${exportDate}.csv`, 'text/csv');
+    downloadFile(csv, `gongwizard-analysis-${exportDate}.csv`, 'text/csv');
   };
 
   // ─── Reset ──────────────────────────────────────────────────────────────
