@@ -134,26 +134,24 @@ function CallCard({
             </div>
 
             {(() => {
+              // Always show top trackers sorted by occurrence count, max 5
+              const topTrackers = (call.trackerData || [])
+                .filter(t => t.name && (t.count || t.occurrences?.length || 0) > 0)
+                .sort((a, b) => (b.count || b.occurrences?.length || 0) - (a.count || a.occurrences?.length || 0))
+                .slice(0, 5);
+              if (!topTrackers.length) return null;
               const hasTrackerFilter = activeTrackers.size > 0;
-              const hasTopicFilter = activeTopics.size > 0;
-              if (!hasTrackerFilter && !hasTopicFilter) {
-                const parts: string[] = [];
-                if (call.trackers?.length) parts.push(`${call.trackers.length} tracker${call.trackers.length !== 1 ? 's' : ''}`);
-                if (call.topics?.length) parts.push(`${call.topics.length} topic${call.topics.length !== 1 ? 's' : ''}`);
-                if (!parts.length) return null;
-                return <span className="text-[10px] text-muted-foreground">{parts.join(' · ')}</span>;
-              }
-              const matchingTrackers = (call.trackers || []).filter(t => activeTrackers.has(t));
-              const matchingTopics = (call.topics || []).filter(t => activeTopics.has(t));
-              if (!matchingTrackers.length && !matchingTopics.length) return null;
               return (
                 <div className="flex flex-wrap gap-1">
-                  {matchingTopics.map(topic => (
-                    <Badge key={topic} variant="secondary" className="text-xs px-1.5 py-0">{topic}</Badge>
-                  ))}
-                  {matchingTrackers.map(tracker => (
-                    <Badge key={tracker} variant="outline" className="text-xs px-1.5 py-0 border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-300">{tracker}</Badge>
-                  ))}
+                  {topTrackers.map(t => {
+                    const count = t.count || t.occurrences?.length || 0;
+                    const isActive = hasTrackerFilter && activeTrackers.has(t.name);
+                    return (
+                      <Badge key={t.name} variant="outline" className={`text-[10px] px-1.5 py-0 ${isActive ? 'border-blue-400 text-blue-700 bg-blue-50 dark:border-blue-600 dark:text-blue-300 dark:bg-blue-950' : 'border-muted-foreground/20 text-muted-foreground'}`}>
+                        {t.name} <span className="opacity-60 ml-0.5">({count})</span>
+                      </Badge>
+                    );
+                  })}
                 </div>
               );
             })()}
