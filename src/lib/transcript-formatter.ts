@@ -94,6 +94,7 @@ const INTERNAL_WORD_THRESHOLD = 150;
 function truncateIfLong(text: string): string {
   const words = text.trim().split(/\s+/);
   if (words.length < INTERNAL_WORD_THRESHOLD) return text.trim();
+  // Split on sentence-ending punctuation (.!?) optionally followed by a closing quote
   const sentences = text.trim().match(/[^.!?]+[.!?]+["']?|[^.!?]+$/g) || [text.trim()];
   if (sentences.length <= 4) return text.trim();
   const first2 = sentences.slice(0, 2).join(' ').trim();
@@ -271,6 +272,7 @@ export function buildCSVSummary(calls: CallForExport[], allCalls: GongCall[]): s
     const full = callMap.get(call.id);
     const internalSpeakers = call.speakers.filter(s => s.isInternal).map(s => s.name).join('; ');
     const externalSpeakers = call.speakers.filter(s => !s.isInternal).map(s => s.name).join('; ');
+    // talkRatio lives on the call root (normalized in calls/route.ts) or inside interactionStats (raw Gong shape)
     const talkRatio = full?.talkRatio != null ? Math.round(full.talkRatio * 100).toString() : (full?.interactionStats?.talkRatio != null ? Math.round(full.interactionStats.talkRatio * 100).toString() : '');
 
     return [

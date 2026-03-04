@@ -23,6 +23,7 @@ export const TRANSCRIPT_BATCH_SIZE = 50;
 const MAX_RETRIES = 5;
 
 export function makeGongFetch(baseUrl: string, authHeader: string) {
+  // Exponential backoff: 2s → 4s → 8s → 16s → 30s (capped at 30s)
   const retryDelayMs = (attempt: number) => Math.min(2 ** attempt * 2, 30) * 1000;
 
   return async function gongFetch(endpoint: string, options: RequestInit = {}) {

@@ -57,6 +57,7 @@ const GREETING_CLOSING_WINDOW_MS = 60_000; // First/last 60s of call = greeting/
 
 function isGreetingOrClosing(timestampMs: number, callDurationMs: number, text: string): boolean {
   const wordCount = text.split(/\s+/).length;
+  // Utterances ≥15 words are substantive enough to keep even in greeting/closing zones
   if (wordCount >= 15) return false;
   // First or last 60 seconds
   return timestampMs < GREETING_CLOSING_WINDOW_MS || timestampMs > (callDurationMs - GREETING_CLOSING_WINDOW_MS);

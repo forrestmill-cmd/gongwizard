@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
   const baseUrl = (rawBaseUrl || 'https://api.gong.io').replace(/\/$/, '');
   const gongFetch = makeGongFetch(baseUrl, authHeader);
   const lowerKeyword = keyword.toLowerCase().trim();
-  const ids: string[] = callIds.slice(0, 500);
+  const ids: string[] = callIds.slice(0, 500); // Hard cap to prevent excessive API calls
 
   const stream = new ReadableStream({
     async start(controller) {
