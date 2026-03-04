@@ -53,7 +53,7 @@ Web app that helps Gong customers export call transcripts optimized for AI analy
 | ZIP Export | client-zip | ^2.5.0 | Browser-side ZIP creation for bulk transcript exports |
 | Testing | @playwright/test | ^1.58.2 | End-to-end smoke tests |
 | Linting | ESLint | ^9 | Code quality (`eslint-config-next` 16.1.6) |
-| Deployment | Vercel | — | Serverless; `maxDuration = 60` on batch-run route |
+| Deployment | Vercel | — | Serverless; `maxDuration = 60` on batch-run, run, synthesize, and followup routes |
 
 Stateless — no database, credentials in sessionStorage only.
 
@@ -82,9 +82,10 @@ Stateless — no database, credentials in sessionStorage only.
 
 - `src/app/api/analyze/score/route.ts` — Relevance scoring (Gemini Flash-Lite, scores 0–10 per call)
 - `src/app/api/analyze/process/route.ts` — Smart truncation of long internal rep monologues (Flash-Lite)
+- `src/app/api/analyze/run/route.ts` — Single-call finding extraction (Gemini 2.5 Pro; `maxDuration = 60`)
 - `src/app/api/analyze/batch-run/route.ts` — Multi-call finding extraction (Gemini 2.5 Pro; `maxDuration = 60`)
-- `src/app/api/analyze/synthesize/route.ts` — Cross-call synthesis (Gemini 2.5 Pro)
-- `src/app/api/analyze/followup/route.ts` — Follow-up Q&A against cached evidence (Gemini 2.5 Pro)
+- `src/app/api/analyze/synthesize/route.ts` — Cross-call synthesis (Gemini 2.5 Pro; `maxDuration = 60`)
+- `src/app/api/analyze/followup/route.ts` — Follow-up Q&A against cached evidence (Gemini 2.5 Pro; `maxDuration = 60`)
 
 ### Components & Hooks
 

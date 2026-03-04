@@ -8,7 +8,7 @@ Last updated: 2026-03-03
 - [Architecture Overview](architecture-overview.md) — System design, component relationships, and technology stack
 - [API Routes](api-routes.md) — All HTTP endpoints with request/response schemas and auth details
 - [Component Tree](component-tree.md) — Page hierarchy, component structure, hooks, and UI library usage
-- [Data Flows](data-flows.md) — Sequence diagrams for auth, connection, call fetch, and export pipelines
+- [Data Flows](data-flows.md) — Sequence diagrams for auth, connection, call fetch, export, and AI research pipeline
 - [Lib Modules](lib-modules.md) — Shared library code, dependency graph, and configuration constants
 - [Configuration Reference](configuration-reference.md) — Environment variables, build config, feature flags, and third-party services
 

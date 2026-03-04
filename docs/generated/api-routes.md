@@ -4,63 +4,63 @@ GongWizard exposes two categories of API routes: **Gong proxy routes** that forw
 
 ---
 
-## Authentication
-
-GongWizard uses two independent auth layers.
-
-### Layer 1 — Site gate (`gw-auth` cookie)
-
-All routes except `/gate`, `/api/auth`, `/api/gong/*`, `/_next/*`, and `/favicon` are protected by Edge middleware (`src/middleware.ts`). The middleware checks for a `gw-auth` cookie with value `"1"`. If absent, the request is redirected to `/gate`.
-
-The cookie is issued by `POST /api/auth` after verifying the submitted password against `process.env.SITE_PASSWORD`. It is `httpOnly`, `sameSite: lax`, valid for 7 days.
-
-Gong proxy routes (`/api/gong/*`) are explicitly exempted from the cookie check because they run before a session is established and enforce their own credential check via Layer 2.
-
-### Layer 2 — Gong API credentials (`X-Gong-Auth` header)
-
-All `/api/gong/*` routes require an `X-Gong-Auth` request header containing a Base64-encoded Basic auth string (`accessKey:secretKey`). This header is constructed client-side from user-supplied credentials, stored in `sessionStorage` under `gongwizard_session` (managed by `src/lib/session.ts`), and forwarded by each proxy route as HTTP Basic auth to Gong. The server never persists these credentials.
-
-AI analysis routes (`/api/analyze/*`) are protected by the `gw-auth` cookie (enforced by middleware) but do not require Gong credentials — they receive pre-processed call data in the request body.
-
-```mermaid
-flowchart LR
-    Browser -->|"POST /api/auth { password }"| AuthRoute["POST /api/auth"]
-    AuthRoute -->|"Set-Cookie: gw-auth=1"| Browser
-    Browser -->|"X-Gong-Auth: Basic base64(key:secret)"| GongProxy["/api/gong/*"]
-    GongProxy -->|"Authorization: Basic base64(key:secret)"| GongAPI["Gong API"]
-    Browser -->|"Cookie: gw-auth=1"| AnalyzeRoutes["/api/analyze/*"]
-    AnalyzeRoutes --> AIProvider["Gemini API"]
-```
-
----
-
 ## Route Summary Table
 
 ### Auth
 
 | Method | Path | Auth Required | Purpose | Response Type |
-| --- | --- | --- | --- | --- |
+|--------|------|---------------|---------|---------------|
 | POST | `/api/auth` | None | Validate site password; issue `gw-auth` cookie | `{ ok: true }` |
 
 ### Gong Proxy
 
 | Method | Path | Auth Required | Purpose | Response Type |
-| --- | --- | --- | --- | --- |
+|--------|------|---------------|---------|---------------|
 | POST | `/api/gong/calls` | `X-Gong-Auth` header | Fetch paginated call list with full extensive metadata | `{ calls: NormalizedCall[] }` |
 | POST | `/api/gong/connect` | `X-Gong-Auth` header | Validate credentials; fetch users, trackers, workspaces | `{ users, trackers, workspaces, internalDomains, baseUrl }` |
-| POST | `/api/gong/search` | `X-Gong-Auth` header | Keyword search across transcripts, streamed as NDJSON | NDJSON stream |
+| POST | `/api/gong/search` | `X-Gong-Auth` header | Keyword search across transcripts, streamed as NDJSON | `application/x-ndjson` stream |
 | POST | `/api/gong/transcripts` | `X-Gong-Auth` header | Fetch transcript monologues for a list of call IDs | `{ transcripts: CallTranscript[] }` |
 
 ### Analyze (AI)
 
 | Method | Path | Auth Required | Purpose | Response Type |
-| --- | --- | --- | --- | --- |
+|--------|------|---------------|---------|---------------|
 | POST | `/api/analyze/batch-run` | `gw-auth` cookie | Extract findings from multiple calls in one AI call | `{ results: { [callId]: { findings[] } } }` |
 | POST | `/api/analyze/followup` | `gw-auth` cookie | Answer a follow-up question against extracted call evidence | `{ answer, quotes[] }` |
 | POST | `/api/analyze/process` | `gw-auth` cookie | Smart-truncate long internal monologues for a single call | `{ truncated: { index, kept }[] }` |
 | POST | `/api/analyze/run` | `gw-auth` cookie | Extract findings from a single call's formatted transcript | `{ findings: Finding[] }` |
 | POST | `/api/analyze/score` | `gw-auth` cookie | Score calls for relevance to a research question | `{ scores: ScoredCall[] }` |
 | POST | `/api/analyze/synthesize` | `gw-auth` cookie | Synthesize findings from multiple analyzed calls into one answer | `{ answer, quotes[] }` |
+
+---
+
+## Authentication
+
+GongWizard uses two independent auth layers.
+
+### Layer 1 — Site gate (`gw-auth` cookie)
+
+`src/middleware.ts` runs on all matched paths (everything except `_next/static`, `_next/image`, `favicon.ico`). The middleware checks for an httpOnly cookie named `gw-auth` with value `"1"`. If absent, the request is redirected to `/gate`.
+
+Paths exempted from the cookie check: `/gate`, `/api/auth`, `/favicon`. All other routes — including `/api/gong/*` and `/api/analyze/*` — require a valid `gw-auth` cookie.
+
+The cookie is issued by `POST /api/auth` after verifying the submitted password against `process.env.SITE_PASSWORD`. Cookie properties: `httpOnly: true`, `sameSite: lax`, `path: /`, `maxAge: 604800` (7 days).
+
+### Layer 2 — Gong API credentials (`X-Gong-Auth` header)
+
+All `/api/gong/*` routes require an `X-Gong-Auth` request header containing a Base64-encoded Basic auth string. The client constructs this as `btoa("accessKey:secretKey")` and stores the result in `sessionStorage` under `gongwizard_session` (managed by `src/lib/session.ts`). Each proxy route forwards it as HTTP Basic auth to Gong (`Authorization: Basic <value>`). Credentials are never persisted server-side and are cleared when the browser tab closes.
+
+AI analysis routes (`/api/analyze/*`) do not require Gong credentials — they receive pre-processed call data in the request body.
+
+```mermaid
+flowchart LR
+    Browser -->|"POST /api/auth { password }"| AuthRoute["POST /api/auth"]
+    AuthRoute -->|"Set-Cookie: gw-auth=1 (7d, httpOnly)"| Browser
+    Browser -->|"X-Gong-Auth: base64(accessKey:secretKey)"| GongProxy["/api/gong/*"]
+    GongProxy -->|"Authorization: Basic base64(accessKey:secretKey)"| GongAPI["Gong API"]
+    Browser -->|"Cookie: gw-auth=1"| AnalyzeRoutes["/api/analyze/*"]
+    AnalyzeRoutes --> Gemini["Gemini API (GEMINI_API_KEY)"]
+```
 
 ---
 
@@ -72,7 +72,7 @@ flowchart LR
 
 **File:** `src/app/api/auth/route.ts`
 
-**Auth:** None. This route is middleware-exempt — it is the route that issues auth.
+**Auth:** None. This route is middleware-exempt — it is the route that issues the `gw-auth` cookie.
 
 **Request body:**
 
@@ -86,16 +86,16 @@ flowchart LR
 { "ok": true }
 ```
 
-Sets `Set-Cookie: gw-auth=1; HttpOnly; SameSite=Lax; Max-Age=604800; Path=/`
+Sets `Set-Cookie: gw-auth=1; HttpOnly; SameSite=Lax; Max-Age=604800; Path=/`.
 
 **Error responses:**
 
 | Status | Body |
-| --- | --- |
+|--------|------|
 | 401 | `{ "error": "Incorrect password." }` |
 | 500 | `{ "error": "Server misconfigured" }` — `SITE_PASSWORD` env var missing |
 
-**Notable behavior:** If `request.json()` throws (malformed body), `password` resolves to `undefined` and the 401 path is taken. Cookie `maxAge` is `60 * 60 * 24 * 7 = 604800` seconds (7 days).
+**Notable behavior:** If `request.json()` throws (malformed body), `password` resolves to `undefined` and the 401 path is taken.
 
 ---
 
@@ -103,26 +103,31 @@ Sets `Set-Cookie: gw-auth=1; HttpOnly; SameSite=Lax; Max-Age=604800; Path=/`
 
 **File:** `src/app/api/gong/connect/route.ts`
 
-**Auth:** `X-Gong-Auth: <base64(accessKey:secretKey)>` required. Returns 401 if absent or if Gong rejects the credentials.
+**Auth:** `gw-auth` cookie + `X-Gong-Auth` header.
 
-**Purpose:** Called once on the Connect page to validate credentials and bootstrap the client session. Fetches all users (paginated), all keyword trackers (paginated), and all workspaces in parallel via `Promise.allSettled`. Derives `internalDomains` from the email addresses of all users.
+**Purpose:** Called once on the Connect page to validate Gong credentials and bootstrap the client session. Fetches all users (paginated), all keyword trackers (paginated), and all workspaces concurrently via `Promise.allSettled`. Derives `internalDomains` from user email addresses for speaker classification.
 
 **Request body:**
 
 ```typescript
 {
-  baseUrl?: string  // Optional custom Gong instance URL. Defaults to "https://api.gong.io". Trailing slashes stripped.
+  baseUrl?: string  // Optional custom Gong instance URL. Default: "https://api.gong.io". Trailing slashes stripped.
 }
 ```
+
+**Gong API calls made (parallel):**
+- `GET /v2/users` — paginated; all users in the workspace
+- `GET /v2/settings/trackers` — paginated; all company keyword trackers
+- `GET /v2/workspaces` — single request
 
 **Response — success (200):**
 
 ```typescript
 {
-  users: GongUser[];           // All users from /v2/users (paginated)
-  trackers: SessionTracker[];  // All trackers from /v2/settings/trackers (paginated)
-  workspaces: GongWorkspace[]; // From /v2/workspaces
-  internalDomains: string[];   // Email domains derived from user records, e.g. ["acme.com"]
+  users: GongUser[];
+  trackers: SessionTracker[];
+  workspaces: GongWorkspace[];
+  internalDomains: string[];   // Email domains from user records, e.g. ["acme.com"]
   baseUrl: string;             // Echoed back normalized base URL
   warnings?: string[];         // Non-fatal failures, e.g. "Failed to fetch trackers."
 }
@@ -153,17 +158,16 @@ interface GongWorkspace {
 **Error responses:**
 
 | Status | Body |
-| --- | --- |
-| 401 | `{ "error": "Missing credentials" }` — header absent |
+|--------|------|
+| 401 | `{ "error": "Missing credentials" }` — `X-Gong-Auth` header absent |
 | 401 | `{ "error": "Invalid API credentials" }` — Gong returned 401 on users fetch |
-| 500 | `{ "error": "Internal server error" }` |
+| 500 | `{ "error": "<message>" }` |
 
 **Notable behavior:**
-
-- Users and trackers are fetched with full cursor-based pagination. A 350 ms sleep (`GONG_RATE_LIMIT_MS`) is inserted between paginated pages.
-- All three fetches run concurrently. Partial failures on trackers or workspaces produce entries in `warnings` rather than a hard error.
-- If the users fetch fails with 401, the route returns 401 immediately regardless of other fetch outcomes.
-- `internalDomains` is computed by extracting the domain segment from every `emailAddress` in the users list. This is the sole mechanism for speaker classification in downstream routes.
+- Users and trackers are fetched with full cursor-based pagination; 350 ms sleep (`GONG_RATE_LIMIT_MS`) between pages.
+- All three fetches run concurrently. Partial failures (trackers or workspaces) produce `warnings` entries rather than a hard error.
+- If the users fetch fails with 401, returns 401 immediately regardless of other fetch outcomes.
+- `internalDomains` is the sole mechanism for internal/external speaker classification in downstream routes.
 
 ---
 
@@ -171,9 +175,9 @@ interface GongWorkspace {
 
 **File:** `src/app/api/gong/calls/route.ts`
 
-**Auth:** `X-Gong-Auth` required.
+**Auth:** `gw-auth` cookie + `X-Gong-Auth` header.
 
-**Purpose:** Fetches a complete call list for a date range with full metadata. Executes in two steps: (1) paginates `/v2/calls` across 30-day date chunks to collect call IDs, then (2) fetches full metadata via `/v2/calls/extensive` in batches of 10. Falls back to basic call data if `/v2/calls/extensive` returns 403.
+**Purpose:** Fetches a complete call list for a date range with full metadata. Executes in two steps: (1) paginates `GET /v2/calls` across 30-day date chunks to collect call IDs; (2) fetches full metadata via `POST /v2/calls/extensive` in batches of 10. Falls back to basic call data if `/v2/calls/extensive` returns 403.
 
 **Request body:**
 
@@ -194,7 +198,7 @@ interface GongWorkspace {
 }
 ```
 
-`NormalizedCall` is the output of `normalizeExtensiveCall()`. Shape:
+`NormalizedCall` is the output of `normalizeExtensiveCall()`:
 
 ```typescript
 {
@@ -231,13 +235,13 @@ interface GongWorkspace {
   questions: any[];
   interactionStats: InteractionStats | null;
   context: any[];
-  accountName: string;       // extracted from CRM context
+  accountName: string;       // extracted from CRM context (objectType: "Account", field: "name")
   accountIndustry: string;
   accountWebsite: string;
 }
 ```
 
-`InteractionStats` type from `src/types/gong.ts`:
+`InteractionStats` from `src/types/gong.ts`:
 
 ```typescript
 interface InteractionStats {
@@ -252,22 +256,20 @@ interface InteractionStats {
 **Error responses:**
 
 | Status | Body |
-| --- | --- |
+|--------|------|
 | 400 | `{ "error": "fromDate and toDate are required" }` |
 | 400 | `{ "error": "Date range exceeds maximum of 365 days" }` |
 | 401 | `{ "error": "Missing credentials" }` |
-| 401 | `{ "error": "Invalid API credentials" }` |
-| 500 | `{ "error": "Internal server error" }` |
+| 500 | `{ "error": "<message>" }` |
 
 **Notable behavior:**
-
-- `MAX_DATE_RANGE_DAYS = 365`. The range check runs before any Gong API calls.
-- Date range is split into 30-day chunks (`CHUNK_DAYS = 30`) via `buildDateChunks()` to avoid Gong pagination limits. Chunks are fetched sequentially with 350 ms delays.
+- `MAX_DATE_RANGE_DAYS = 365`. Range check runs before any Gong API calls.
+- Date range is split into 30-day chunks (`CHUNK_DAYS = 30`) via `buildDateChunks()` to work within Gong pagination limits. Chunks are fetched sequentially with 350 ms delays between chunks.
 - Duplicate call IDs across chunk boundaries are deduplicated with a `Set<string>`.
-- Extensive batch size: 10 calls per request (`EXTENSIVE_BATCH_SIZE`). 350 ms sleep between batches.
-- On 403 from `/v2/calls/extensive`, falls back to basic call data. Fallback records have empty `parties`, `topics`, `trackers`, `brief`, `outline`, and `questions`.
-- `accountName`, `accountIndustry`, `accountWebsite` are extracted from the nested `context[].objects[].fields[]` structure via `extractFieldValues()`, filtering by `objectType = "Account"`.
-- All `startTime` values from Gong (seconds) are converted to `startTimeMs` (milliseconds) by `normalizeExtensiveCall()` and `normalizeOutline()`.
+- Extensive batch size: 10 calls per request (`EXTENSIVE_BATCH_SIZE`); 350 ms sleep between batches.
+- On 403 from `/v2/calls/extensive`, logs a warning and falls back to basic call data. Fallback records have empty `parties`, `topics`, `trackers`, `brief`, `outline`, and `questions`.
+- All `startTime` values from Gong (seconds) are converted to `startTimeMs` (milliseconds) in `normalizeExtensiveCall()` and `normalizeOutline()`.
+- `accountName`, `accountIndustry`, `accountWebsite` are extracted from the nested `context[].objects[].fields[]` CRM context structure via `extractFieldValues()`.
 
 ---
 
@@ -275,9 +277,9 @@ interface InteractionStats {
 
 **File:** `src/app/api/gong/transcripts/route.ts`
 
-**Auth:** `X-Gong-Auth` required.
+**Auth:** `gw-auth` cookie + `X-Gong-Auth` header.
 
-**Purpose:** Fetches transcript monologues for a list of call IDs. Batches requests to Gong's `/v2/calls/transcript` endpoint in groups of 50, supports cursor pagination within each batch, and merges monologues from all pages per call.
+**Purpose:** Fetches transcript monologues for a list of call IDs. Batches requests to `POST /v2/calls/transcript` in groups of 50, handles cursor pagination within each batch, and merges all monologues per call across pages.
 
 **Request body:**
 
@@ -294,14 +296,7 @@ interface InteractionStats {
 {
   transcripts: Array<{
     callId: string;
-    transcript: Array<{          // TranscriptMonologue[]
-      speakerId: string;
-      sentences: Array<{
-        text: string;
-        start: number;           // milliseconds from call start
-        end?: number;            // milliseconds from call start
-      }>;
-    }>;
+    transcript: TranscriptMonologue[];
   }>
 }
 ```
@@ -316,26 +311,24 @@ interface TranscriptMonologue {
 
 interface TranscriptSentence {
   text: string;
-  start: number;  // milliseconds
-  end?: number;   // milliseconds
+  start: number;  // milliseconds from call start
+  end?: number;   // milliseconds from call start
 }
 ```
 
 **Error responses:**
 
 | Status | Body |
-| --- | --- |
+|--------|------|
 | 400 | `{ "error": "callIds array is required" }` |
 | 401 | `{ "error": "Missing credentials" }` |
-| 401 | `{ "error": "Invalid API credentials" }` |
-| 500 | `{ "error": "Internal server error" }` |
+| 500 | `{ "error": "<message>" }` |
 
 **Notable behavior:**
-
 - Batch size: 50 call IDs per Gong request (`TRANSCRIPT_BATCH_SIZE`).
 - 350 ms sleep between batches and between paginated pages within a batch.
-- Monologues for a given `callId` are accumulated across all pages into `transcriptMap[callId]`.
-- Only calls with transcript data appear in the response — calls with no transcript are silently omitted.
+- Monologues for a given `callId` are accumulated into `transcriptMap[callId]` across all pages.
+- Calls with no transcript data are silently omitted from the response.
 
 ---
 
@@ -343,15 +336,15 @@ interface TranscriptSentence {
 
 **File:** `src/app/api/gong/search/route.ts`
 
-**Auth:** `X-Gong-Auth` required. Returns 401 if absent.
+**Auth:** `gw-auth` cookie + `X-Gong-Auth` header.
 
-**Purpose:** Performs a keyword substring search across transcript sentences for a list of call IDs. Results are streamed progressively as NDJSON so the client can display matches incrementally while the search is in progress.
+**Purpose:** Keyword substring search across transcript sentences for a set of call IDs. Results are streamed progressively as NDJSON so the client can display matches incrementally while the search is in progress.
 
 **Request body:**
 
 ```typescript
 {
-  callIds: string[];  // Required. Capped to first 500.
+  callIds: string[];  // Required. Capped to first 500 entries server-side.
   keyword: string;    // Required. Case-insensitive substring match against sentence text.
   baseUrl?: string;   // Default: "https://api.gong.io"
 }
@@ -370,7 +363,7 @@ interface TranscriptSentence {
   context: string;    // preceding sentence text, or "" if first sentence in monologue
 }
 
-// Progress update after each batch of call IDs:
+// Progress update emitted after each batch of 50 call IDs:
 {
   type: "progress";
   searched: number;
@@ -386,19 +379,18 @@ interface TranscriptSentence {
 }
 ```
 
-**Error responses:**
+**Error responses (returned before stream starts):**
 
 | Status | Body |
-| --- | --- |
+|--------|------|
 | 401 | `{ "error": "Missing auth" }` |
 | 400 | `{ "error": "Missing callIds or keyword" }` |
 
 **Notable behavior:**
-
-- Transcript fetching uses 50-ID batching and 350 ms rate limiting, identical to `/api/gong/transcripts`.
-- Batches that fail are silently skipped (`console.error` logged); the stream continues with remaining batches.
-- A progress event is emitted after every batch regardless of whether matches were found.
-- `callIds` input is sliced to 500 maximum before processing.
+- Transcript fetching uses the same 50-ID batching and 350 ms rate limiting as `/api/gong/transcripts`.
+- Batches that fail are silently skipped (logged via `console.error`); the stream continues with remaining batches.
+- A `progress` event is emitted after every batch regardless of whether matches were found.
+- `sentence.start` from Gong is in seconds; the route converts to milliseconds before passing to `formatTimestamp`.
 
 ---
 
@@ -406,9 +398,11 @@ interface TranscriptSentence {
 
 **File:** `src/app/api/analyze/score/route.ts`
 
-**Auth:** `gw-auth` cookie (enforced by middleware).
+**Auth:** `gw-auth` cookie (enforced by middleware). No Gong credentials required.
 
-**Purpose:** Scores a batch of calls for relevance to a research question using call metadata only (brief, key points, trackers, topics, outline). No transcript content is used. Intended as the first step of the analysis pipeline to prioritize which calls to analyze.
+**AI model:** `gemini-2.0-flash-lite` via `cheapCompleteJSON` from `src/lib/ai-providers.ts`.
+
+**Purpose:** Scores a batch of calls for relevance to a research question using call metadata only (brief, key points, trackers, topics, outline structure). No transcript content is used. First step of the analysis pipeline — identifies which calls to analyze in depth and which outline sections to focus on.
 
 **Request body:**
 
@@ -431,13 +425,15 @@ interface TranscriptSentence {
 }
 ```
 
+**AI parameters:** `temperature: 0.2`, `maxTokens: 4096`.
+
 **Response — success (200):**
 
 ```typescript
 {
   scores: Array<{
     callId: string;
-    score: number;              // 0–10, clamped via Math.max/Math.min
+    score: number;              // 0–10, clamped via Math.max(0, Math.min(10, s.score))
     reason: string;             // one-sentence explanation
     relevantSections: string[]; // outline section names most likely to contain signal
   }>
@@ -447,16 +443,13 @@ interface TranscriptSentence {
 **Error responses:**
 
 | Status | Body |
-| --- | --- |
+|--------|------|
 | 400 | `{ "error": "question and calls[] are required" }` |
 | 500 | `{ "error": "<message>" }` |
 
 **Notable behavior:**
-
-- Uses `cheapCompleteJSON` (Gemini Flash-Lite), `temperature: 0.2`, `maxTokens: 4096`.
 - All calls are sent to the model in a single prompt; results are returned for all calls in input order.
-- On AI failure, returns neutral fallback scores (`score: 5`, all outline section names as `relevantSections`) rather than an error — the pipeline can continue with all calls included at equal priority.
-- `score` is clamped to [0, 10] after the model response.
+- On AI failure (inner try/catch), returns neutral fallback scores (`score: 5`, all outline section names as `relevantSections`) so the pipeline can continue with all calls included at equal priority.
 
 ---
 
@@ -466,7 +459,9 @@ interface TranscriptSentence {
 
 **Auth:** `gw-auth` cookie (enforced by middleware).
 
-**Purpose:** Surgically truncates long internal rep monologues (those marked `needsSmartTruncation` by `performSurgery()`) to retain only sentences relevant to the research question. Called per-call after `performSurgery()` identifies excerpts. Reduces transcript volume before the more expensive `/api/analyze/run` step.
+**AI model:** `gemini-2.0-flash-lite` via `cheapCompleteJSON` from `src/lib/ai-providers.ts`.
+
+**Purpose:** Surgically truncates long internal rep monologues (those flagged `needsSmartTruncation: true` by `performSurgery()` in `src/lib/transcript-surgery.ts`) to retain only sentences relevant to the research question. Called after `score` and `performSurgery()`, before `run`/`batch-run`. All long monologues for one call are batched into a single AI request.
 
 **Request body:**
 
@@ -474,18 +469,22 @@ interface TranscriptSentence {
 {
   question: string;
   monologues: Array<{
-    index: number;  // index into the SurgeryResult.excerpts[] array (for round-trip correlation)
+    index: number;  // index into the SurgeryResult.excerpts[] array — used for round-trip correlation
     text: string;   // full monologue text
   }>;
 }
 ```
+
+The prompt is built by `buildSmartTruncationPrompt(question, monologues)` from `src/lib/transcript-surgery.ts`.
+
+**AI parameters:** `temperature: 0.2`, `maxTokens: 2048`.
 
 **Response — success (200):**
 
 ```typescript
 {
   truncated: Array<{
-    index: number;  // echoed back from input for correlation
+    index: number;  // echoed from input for caller correlation
     kept: string;   // retained sentences verbatim, or "[context omitted]"
   }>
 }
@@ -494,15 +493,11 @@ interface TranscriptSentence {
 **Error responses:**
 
 | Status | Body |
-| --- | --- |
+|--------|------|
 | 400 | `{ "error": "question and monologues[] are required" }` |
 | 500 | `{ "error": "<message>" }` |
 
-**Notable behavior:**
-
-- Uses `cheapCompleteJSON` (Gemini Flash-Lite), `temperature: 0.2`, `maxTokens: 2048`.
-- Prompt is built by `buildSmartTruncationPrompt()` from `src/lib/transcript-surgery.ts`. All monologues for one call are batched into a single AI request.
-- The model is instructed to keep only sentences that set up a customer response, contain pricing/product claims, or ask a question the customer then answers.
+**Notable behavior:** The model is instructed to keep only sentences that set up a customer response, contain pricing or product claims relevant to the research question, or ask a question the customer then answers. Pleasantries, filler, and repetition are dropped.
 
 ---
 
@@ -512,7 +507,9 @@ interface TranscriptSentence {
 
 **Auth:** `gw-auth` cookie (enforced by middleware).
 
-**Purpose:** Analyzes a single call's pre-processed transcript for evidence relevant to a research question. Extracts verbatim quotes from external speakers only (prospects, customers, partners — never internal team members).
+**AI model:** `gemini-2.5-pro` via `smartCompleteJSON` from `src/lib/ai-providers.ts`. `maxDuration = 60`.
+
+**Purpose:** Analyzes a single call's pre-processed transcript excerpts for evidence relevant to a research question. Extracts verbatim quotes exclusively from external speakers (prospects, customers, partners). Use for single-call analysis; use `batch-run` for multiple calls.
 
 **Request body:**
 
@@ -531,6 +528,8 @@ interface TranscriptSentence {
 }
 ```
 
+**AI parameters:** `temperature: 0.3`, `maxTokens: 4096`.
+
 **Response — success (200):**
 
 ```typescript
@@ -540,9 +539,9 @@ interface TranscriptSentence {
     speaker_name: string;
     job_title: string;
     company: string;
-    is_external: boolean;   // always true — only external speaker quotes are returned
+    is_external: boolean;   // always true — only external speaker quotes returned
     timestamp: string;
-    context: string;
+    context: string;        // brief description of what prompted the statement
     significance: "high" | "medium" | "low";
     finding_type: "objection" | "need" | "competitive" | "question" | "feedback";
   }>
@@ -552,15 +551,13 @@ interface TranscriptSentence {
 **Error responses:**
 
 | Status | Body |
-| --- | --- |
+|--------|------|
 | 400 | `{ "error": "question and callData required" }` |
 | 500 | `{ "error": "<message>" }` |
 
 **Notable behavior:**
-
-- Uses `smartCompleteJSON` (Gemini 2.5 Pro), `temperature: 0.3`, `maxTokens: 4096`.
-- Returns `findings: []` when no relevant external speaker evidence exists — never returns null or omits the key.
-- This route uses `new Response(JSON.stringify(result), ...)` for both success and error paths rather than `NextResponse.json()` — the only route in the codebase to do so.
+- Returns `findings: []` when no relevant external speaker evidence exists.
+- This route uses `new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } })` for both success and error paths rather than `NextResponse.json()`.
 
 ---
 
@@ -570,9 +567,9 @@ interface TranscriptSentence {
 
 **Auth:** `gw-auth` cookie (enforced by middleware).
 
-**Vercel timeout:** `export const maxDuration = 60` (60-second function timeout).
+**AI model:** `gemini-2.5-pro` via `smartCompleteJSON` from `src/lib/ai-providers.ts`. `maxDuration = 60`.
 
-**Purpose:** Analyzes multiple calls in a single AI prompt for efficiency. Same extraction goal as `/api/analyze/run` but sends all calls together to avoid per-call latency. Returns findings keyed by `callId`.
+**Purpose:** Analyzes multiple calls in a single AI prompt. Same extraction goal as `/api/analyze/run` but sends all calls together to reduce round-trip latency and allow the model to build cross-call context. Returns findings keyed by `callId`.
 
 **Request body:**
 
@@ -581,7 +578,7 @@ interface TranscriptSentence {
   question: string;
   calls: Array<{
     callId: string;
-    callData: string;           // Pre-formatted transcript text
+    callData: string;           // Pre-formatted transcript excerpts
     brief: string;
     speakerDirectory: Array<{
       speakerId: string;
@@ -594,6 +591,8 @@ interface TranscriptSentence {
   }>;
 }
 ```
+
+**AI parameters:** `temperature: 0.3`, `maxTokens: 16384`.
 
 **Response — success (200):**
 
@@ -620,15 +619,14 @@ interface TranscriptSentence {
 **Error responses:**
 
 | Status | Body |
-| --- | --- |
+|--------|------|
 | 400 | `{ "error": "question and calls required" }` |
 | 500 | `{ "error": "<message>" }` |
 
 **Notable behavior:**
-
-- Uses `smartCompleteJSON` (Gemini 2.5 Pro), `temperature: 0.3`, `maxTokens: 16384`.
-- Every input `callId` is guaranteed present in the response `results`, even if `findings` is empty for that call.
-- External speakers across all calls are compiled into a shared header in the prompt for cross-call attribution context.
+- Every `callId` from the input is present as a key in `results`, even if `findings` is empty for that call.
+- External speakers across all calls are compiled into a shared speaker header in the prompt for cross-call attribution context.
+- Uses `new Response(JSON.stringify(result), ...)` rather than `NextResponse.json()` for both success and error paths.
 
 ---
 
@@ -638,7 +636,9 @@ interface TranscriptSentence {
 
 **Auth:** `gw-auth` cookie (enforced by middleware).
 
-**Purpose:** Takes findings extracted from multiple analyzed calls and synthesizes a 2–4 sentence direct answer to the research question with supporting verbatim quotes. Designed as the final step of the analysis pipeline after scoring, processing, and running.
+**AI model:** `gemini-2.5-pro` via `smartCompleteJSON` from `src/lib/ai-providers.ts`. `maxDuration = 60`.
+
+**Purpose:** Takes findings extracted from multiple analyzed calls and produces a direct 2–4 sentence answer to the research question supported by verbatim quotes with full attribution. Final step of the analysis pipeline after scoring, processing, and finding extraction.
 
 **Request body:**
 
@@ -665,6 +665,8 @@ interface TranscriptSentence {
 }
 ```
 
+**AI parameters:** `temperature: 0.3`, `maxTokens: 4096`.
+
 **Response — success (200):**
 
 ```typescript
@@ -684,16 +686,14 @@ interface TranscriptSentence {
 **Error responses:**
 
 | Status | Body |
-| --- | --- |
+|--------|------|
 | 400 | `{ "error": "question and allFindings[] are required" }` |
 | 500 | `{ "error": "<message>" }` |
 
 **Notable behavior:**
-
-- Uses `smartCompleteJSON` (Gemini 2.5 Pro), `temperature: 0.3`, `maxTokens: 4096`.
 - Only findings where `is_external === true` are included in the synthesis prompt.
-- If no external speaker findings exist in `allFindings`, returns a fixed answer `"No relevant statements from external speakers were found in the analyzed calls."` with `quotes: []` without making an AI call.
-- All quotes in the response must be verbatim from the input evidence — the system prompt forbids paraphrasing.
+- If `allFindings` contains no external speaker findings at all, returns a fixed `answer` of `"No relevant statements from external speakers were found in the analyzed calls."` with `quotes: []` without making an AI call.
+- The system prompt forbids paraphrasing — all quotes in the response must be verbatim from the input evidence.
 
 ---
 
@@ -703,7 +703,9 @@ interface TranscriptSentence {
 
 **Auth:** `gw-auth` cookie (enforced by middleware).
 
-**Purpose:** Answers a follow-up question against previously extracted call evidence without re-fetching or re-analyzing transcripts. Enables conversational research sessions.
+**AI model:** `gemini-2.5-pro` via `smartCompleteJSON` from `src/lib/ai-providers.ts`. `maxDuration = 60`.
+
+**Purpose:** Answers a follow-up question against previously extracted call evidence without re-fetching or re-analyzing transcripts. Enables conversational research sessions within the `AnalyzePanel` component.
 
 **Request body:**
 
@@ -712,9 +714,11 @@ interface TranscriptSentence {
   followUpQuestion: string;   // Required
   processedData: string;      // Required — pre-formatted evidence text (external speaker quotes with attribution)
   question?: string;          // Original research question for context
-  previousFindings?: unknown; // Prior answers to include as context (optional)
+  previousFindings?: unknown; // Prior answers serialized to JSON for conversation context
 }
 ```
+
+**AI parameters:** `temperature: 0.3`, `maxTokens: 4096`.
 
 **Response — success (200):**
 
@@ -735,14 +739,12 @@ interface TranscriptSentence {
 **Error responses:**
 
 | Status | Body |
-| --- | --- |
+|--------|------|
 | 400 | `{ "error": "followUpQuestion and processedData are required" }` |
 | 500 | `{ "error": "<message>" }` |
 
 **Notable behavior:**
-
-- Uses `smartCompleteJSON` (Gemini 2.5 Pro), `temperature: 0.3`, `maxTokens: 4096`.
-- `previousFindings` is `JSON.stringify`-ed and included in the prompt when present.
+- `previousFindings` is `JSON.stringify`-ed and appended to the prompt when present.
 - Constrained to external speaker quotes only, identical to all other analysis routes.
 
 ---
@@ -757,86 +759,79 @@ export const config = {
 };
 ```
 
-The middleware runs on all matched paths. Decision logic:
+Decision logic on every matched request:
 
-1. Path starts with `/gate`, `/api/auth`, `/api/gong/`, or `/_next/` — pass through.
-2. Cookie `gw-auth` equals `"1"` — pass through.
-3. Otherwise — redirect to `/gate`.
+1. Path starts with `/gate`, `/api/auth`, or `/favicon` → pass through unconditionally.
+2. Cookie `gw-auth` equals `"1"` → pass through.
+3. Otherwise → redirect to `/gate`.
 
-Note: `/api/analyze/*` routes are **not** in the exemption list, so they are protected by the `gw-auth` cookie check.
+Note: `/api/gong/*` and `/api/analyze/*` are **not** in the exemption list. Both route groups require a valid `gw-auth` cookie in addition to their respective credential checks.
 
 ---
 
 ## AI Provider Details
 
-All analysis routes use the shared abstraction in `src/lib/ai-providers.ts`:
+All analysis routes use the shared abstraction in `src/lib/ai-providers.ts`. The `GoogleGenAI` client is lazy-initialized from `process.env.GEMINI_API_KEY` on first use.
 
-| Function | Model | Temperature | Max tokens | Used by |
-| --- | --- | --- | --- | --- |
-| `cheapCompleteJSON` | `gemini-3.1-flash-lite-preview` | 0.2 | 2048–4096 | `score`, `process` |
-| `smartCompleteJSON` | `gemini-2.5-pro` | 0.3 | 4096–16384 | `run`, `batch-run`, `synthesize`, `followup` |
-| `smartStream` | `gemini-2.5-pro` | 0.3 | 8192 | Not currently used by any route handler |
+| Function | Model | JSON mode | Default max tokens | Used by |
+|----------|-------|-----------|--------------------|---------|
+| `cheapCompleteJSON` | `gemini-2.0-flash-lite` | Yes (`responseMimeType: 'application/json'`) | 1024 | `score`, `process` |
+| `smartCompleteJSON` | `gemini-2.5-pro` | Yes | 8192 | `run`, `batch-run`, `synthesize`, `followup` |
+| `smartStream` | `gemini-2.5-pro` | No | 8192 | Defined but not currently used by any route handler |
 
-The `GoogleGenAI` client from `@google/genai` is initialized lazily on first use from `process.env.GEMINI_API_KEY`. All analysis routes fail with a 500 error if this key is absent.
+All routes pass `temperature` and `maxTokens` overrides that differ from the defaults (see per-route sections above). `smartCompleteJSON` additionally accepts a `systemPrompt` option passed as `systemInstruction` to the Gemini API.
 
 ---
 
 ## Gong API Rate Limiting
 
-All proxy routes enforce a 350 ms delay (`GONG_RATE_LIMIT_MS`) between paginated requests using the `sleep()` helper from `src/lib/gong-api.ts`. Batch size constants:
+All proxy routes use shared constants and helpers from `src/lib/gong-api.ts`:
 
 | Constant | Value | Applied to |
-| --- | --- | --- |
-| `GONG_RATE_LIMIT_MS` | 350 ms | All paginated/batched Gong requests |
+|----------|-------|------------|
+| `GONG_RATE_LIMIT_MS` | 350 ms | Sleep between all paginated/batched Gong requests |
 | `EXTENSIVE_BATCH_SIZE` | 10 | `/v2/calls/extensive` batches in `/api/gong/calls` |
 | `TRANSCRIPT_BATCH_SIZE` | 50 | `/v2/calls/transcript` batches in `/api/gong/transcripts` and `/api/gong/search` |
 
-Gong errors are handled by `handleGongError()` in `src/lib/gong-api.ts`, which maps `GongApiError` status codes to appropriate HTTP responses.
+`makeGongFetch(baseUrl, authHeader)` returns a fetch wrapper that applies exponential backoff with up to 5 retries on 429 and 5xx responses. `handleGongError(error)` maps `GongApiError` instances to appropriate HTTP responses.
 
 ---
 
 ## Analysis Pipeline Flow
 
-The full analysis pipeline is orchestrated client-side:
+The full four-stage pipeline is orchestrated client-side by `src/components/analyze-panel.tsx`:
 
 ```mermaid
 sequenceDiagram
-    participant Client
+    participant Client as AnalyzePanel (client)
     participant Score as POST /api/analyze/score
     participant Process as POST /api/analyze/process
-    participant Run as POST /api/analyze/run
     participant BatchRun as POST /api/analyze/batch-run
     participant Synthesize as POST /api/analyze/synthesize
     participant Followup as POST /api/analyze/followup
-    participant Gemini
+    participant Gemini as Gemini API
 
-    Client->>Score: { question, calls[] } (metadata only)
-    Score->>Gemini: cheapCompleteJSON (Gemini Flash-Lite)
-    Score-->>Client: { scores[] } — relevance 0-10 + relevant outline sections
+    Client->>Score: { question, calls[] } — metadata only
+    Score->>Gemini: cheapCompleteJSON (Flash-Lite, temp 0.2)
+    Score-->>Client: { scores[] } — relevance 0–10 + outline sections
 
-    Note over Client: Client filters/prioritizes calls by score,<br/>runs performSurgery() locally to extract excerpts
+    Note over Client: Client ranks calls by score, runs performSurgery() locally<br/>to extract relevant excerpts and flag long internal monologues
 
-    Client->>Process: { question, monologues[] } (long internal turns only)
-    Process->>Gemini: cheapCompleteJSON (Gemini Flash-Lite)
-    Process-->>Client: { truncated[] } — kept sentences per monologue index
+    Client->>Process: { question, monologues[] } — long internal turns only
+    Process->>Gemini: cheapCompleteJSON (Flash-Lite, temp 0.2)
+    Process-->>Client: { truncated[] } — condensed monologue text per index
 
-    alt Single call or per-call mode
-        Client->>Run: { question, callData, speakerDirectory, callMeta }
-        Run->>Gemini: smartCompleteJSON (Gemini 2.5 Pro)
-        Run-->>Client: { findings[] }
-    else Batch mode
-        Client->>BatchRun: { question, calls[] }
-        BatchRun->>Gemini: smartCompleteJSON (Gemini 2.5 Pro)
-        BatchRun-->>Client: { results: { [callId]: { findings[] } } }
-    end
+    Client->>BatchRun: { question, calls[] } — pre-processed excerpt text
+    BatchRun->>Gemini: smartCompleteJSON (2.5 Pro, temp 0.3, maxTokens 16384)
+    BatchRun-->>Client: { results: { [callId]: { findings[] } } }
 
     Client->>Synthesize: { question, allFindings[] }
-    Synthesize->>Gemini: smartCompleteJSON (Gemini 2.5 Pro)
+    Synthesize->>Gemini: smartCompleteJSON (2.5 Pro, temp 0.3, maxTokens 4096)
     Synthesize-->>Client: { answer, quotes[] }
 
     opt Follow-up questions
         Client->>Followup: { followUpQuestion, processedData, previousFindings }
-        Followup->>Gemini: smartCompleteJSON (Gemini 2.5 Pro)
+        Followup->>Gemini: smartCompleteJSON (2.5 Pro, temp 0.3, maxTokens 4096)
         Followup-->>Client: { answer, quotes[] }
     end
 ```
