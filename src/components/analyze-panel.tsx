@@ -265,7 +265,6 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         const speakerInternalMap = new Map<string, boolean>();
         const speakerMap: Record<string, { name: string; title: string }> = {};
         const speakerDirectoryRaw: Array<{ speakerId: string; name: string; jobTitle: string; company: string; isInternal: boolean }> = [];
-        const isExternal = (p: any) => !isInternalParty(p, internalDomains);
         for (const p of parties) {
           const id = p.speakerId || p.userId || p.id;
           if (id) {
