@@ -155,7 +155,16 @@ export async function POST(request: NextRequest) {
         if (workspaceId) params.set('workspaceId', workspaceId);
         if (cursor) params.set('cursor', cursor);
 
-        const data = await gongFetch(`/v2/calls?${params.toString()}`);
+        let data: any;
+        try {
+          data = await gongFetch(`/v2/calls?${params.toString()}`);
+        } catch (err) {
+          // Gong returns 404 "No calls found" when a date chunk has no calls — skip it
+          if (err instanceof GongApiError && err.status === 404) {
+            break;
+          }
+          throw err;
+        }
         const page: any[] = data.calls || [];
 
         for (const call of page) {

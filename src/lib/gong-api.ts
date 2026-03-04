@@ -44,7 +44,7 @@ export function makeGongFetch(baseUrl: string, authHeader: string) {
           return await response.json();
         }
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401 || response.status === 403 || response.status === 404) {
           const text = await response.text().catch(() => '');
           throw new GongApiError(response.status, text, endpoint);
         }
