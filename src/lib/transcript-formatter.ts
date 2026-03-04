@@ -2,6 +2,7 @@
 
 import { estimateTokens } from './token-utils';
 import { formatDuration, formatTimestamp, escapeCSV } from './format-utils';
+import type { InteractionStats, GongCall } from '@/types/gong';
 import { buildUtterances, alignTrackersToUtterances, extractTrackerOccurrences } from './tracker-alignment';
 import { findNearestOutlineItem, type OutlineSection } from './transcript-surgery';
 
@@ -38,7 +39,7 @@ export interface CallForExport {
   speakers: Speaker[];
   brief: string;
   turns: FormattedTurn[];
-  interactionStats?: any;
+  interactionStats?: InteractionStats;
   rawMonologues?: Array<{
     speakerId: string;
     sentences?: Array<{ text: string; start: number; end?: number }>;
@@ -257,20 +258,20 @@ export function buildJSONL(calls: CallForExport[], opts: ExportOptions): string 
     .join('\n');
 }
 
-export function buildCSVSummary(calls: CallForExport[], allCalls: any[]): string {
+export function buildCSVSummary(calls: CallForExport[], allCalls: GongCall[]): string {
   const headers = [
     'Call ID', 'Title', 'Date', 'Duration (s)', 'Duration', 'Account',
     'Topics', 'Trackers', 'Talk Ratio %', 'Brief', 'Key Points', 'Action Items',
     'Internal Speakers', 'External Speakers', 'Gong URL'
   ];
 
-  const callMap = new Map(allCalls.map((c: any) => [c.id, c]));
+  const callMap = new Map(allCalls.map(c => [c.id, c]));
 
   const rows = calls.map(call => {
-    const full = callMap.get(call.id) || {} as any;
+    const full = callMap.get(call.id);
     const internalSpeakers = call.speakers.filter(s => s.isInternal).map(s => s.name).join('; ');
     const externalSpeakers = call.speakers.filter(s => !s.isInternal).map(s => s.name).join('; ');
-    const talkRatio = full.talkRatio != null ? Math.round(full.talkRatio * 100).toString() : (full.interactionStats?.talkRatio != null ? Math.round(full.interactionStats.talkRatio * 100).toString() : '');
+    const talkRatio = full?.talkRatio != null ? Math.round(full.talkRatio * 100).toString() : (full?.interactionStats?.talkRatio != null ? Math.round(full.interactionStats.talkRatio * 100).toString() : '');
 
     return [
       call.id,
@@ -278,16 +279,16 @@ export function buildCSVSummary(calls: CallForExport[], allCalls: any[]): string
       call.date,
       call.duration.toString(),
       formatDuration(call.duration),
-      call.accountName || full.accountName || '',
-      (full.topics || []).join('; '),
-      (full.trackers || []).join('; '),
+      call.accountName || full?.accountName || '',
+      (full?.topics || []).join('; '),
+      (full?.trackers || []).join('; '),
       talkRatio,
-      (call.brief || full.brief || '').replace(/\n/g, ' '),
-      (full.keyPoints || []).join('; '),
-      (full.actionItems || []).join('; '),
+      (call.brief || full?.brief || '').replace(/\n/g, ' '),
+      (full?.keyPoints || []).join('; '),
+      (full?.actionItems || []).join('; '),
       internalSpeakers,
       externalSpeakers,
-      full.url || '',
+      full?.url || '',
     ];
   });
 
@@ -324,7 +325,7 @@ function buildCsvContext(
   return parts.join(' | ');
 }
 
-export function buildUtteranceCSV(calls: CallForExport[], allCalls: any[]): string {
+export function buildUtteranceCSV(calls: CallForExport[], allCalls: GongCall[]): string {
   const headers = [
     'Call ID', 'Call Date', 'Account Name',
     'Speaker Name', 'Speaker Title',
@@ -332,24 +333,24 @@ export function buildUtteranceCSV(calls: CallForExport[], allCalls: any[]): stri
     'PRIMARY_ANALYSIS_TEXT', 'REFERENCE_ONLY_CONTEXT',
   ];
 
-  const callMap = new Map(allCalls.map((c: any) => [c.id, c]));
+  const callMap = new Map(allCalls.map(c => [c.id, c]));
   const rows: string[][] = [];
 
   for (const call of calls) {
     if (!call.rawMonologues || call.rawMonologues.length === 0) continue;
 
     const speakerMap = new Map(call.speakers.map(s => [s.speakerId, s]));
-    const rawCall = callMap.get(call.id) || {} as any;
+    const rawCall = callMap.get(call.id);
 
     const utterances = buildUtterances(
       call.rawMonologues,
       (speakerId) => speakerMap.get(speakerId)?.isInternal ?? true
     );
 
-    const trackerOccs = extractTrackerOccurrences(rawCall.trackerData || []);
+    const trackerOccs = extractTrackerOccurrences(rawCall?.trackerData || []);
     alignTrackersToUtterances(utterances, trackerOccs);
 
-    const outline: OutlineSection[] = (rawCall.outline || []).map((o: any) => ({
+    const outline: OutlineSection[] = (rawCall?.outline || []).map((o: any) => ({
       name: o.section || o.name || '',
       startTimeMs: (o.startTime || 0) * 1000,
       durationMs: (o.duration || 0) * 1000,
@@ -377,7 +378,7 @@ export function buildUtteranceCSV(calls: CallForExport[], allCalls: any[]): stri
       rows.push([
         call.id,
         call.date,
-        call.accountName || rawCall.accountName || '',
+        call.accountName || rawCall?.accountName || '',
         speakerName,
         speakerTitle,
         outlineSection,
@@ -399,7 +400,7 @@ export function buildExportContent(
   calls: CallForExport[],
   fmt: 'markdown' | 'xml' | 'jsonl' | 'csv' | 'utterance-csv',
   opts: ExportOptions,
-  allCalls?: any[]
+  allCalls?: GongCall[]
 ): { content: string; extension: string; mimeType: string } {
   if (fmt === 'markdown') {
     return { content: buildMarkdown(calls, opts), extension: 'md', mimeType: 'text/markdown' };

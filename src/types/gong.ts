@@ -85,6 +85,8 @@ export interface GongSession {
   workspaces: GongWorkspace[];
   internalDomains: string[];
   baseUrl: string;
+  fromDate?: string;
+  toDate?: string;
 }
 
 export interface GongUser {

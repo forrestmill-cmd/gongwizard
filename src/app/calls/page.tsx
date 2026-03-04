@@ -45,7 +45,7 @@ import { type ExportOptions } from '@/lib/transcript-formatter';
 import { useCallExport } from '@/hooks/useCallExport';
 import { useFilterState } from '@/hooks/useFilterState';
 import { getSession } from '@/lib/session';
-import { GongCall } from '@/types/gong';
+import { GongCall, GongSession } from '@/types/gong';
 
 const FORMAT_OPTIONS = [
   { value: 'markdown',      label: 'Markdown',      desc: 'Upload to ChatGPT or Claude' },
@@ -204,7 +204,7 @@ function CallCard({
 
 export default function CallsPage() {
   const router = useRouter();
-  const [session, setSession] = useState<any>(null);
+  const [session, setSession] = useState<GongSession | null>(null);
 
   const [calls, setCalls] = useState<GongCall[]>([]);
   const [loading, setLoading] = useState(false);
@@ -240,7 +240,7 @@ export default function CallsPage() {
 
   const { exporting, copied, handleExport, handleCopy, handleZipExport } = useCallExport({
     selectedIds,
-    session,
+    session: session!,
     calls,
     exportFormat,
     exportOpts,
@@ -350,7 +350,6 @@ export default function CallsPage() {
     transcriptSearchActive,
     searchMatches,
     speakerFilter,
-    session,
   ]);
 
   const selectedCalls = useMemo(

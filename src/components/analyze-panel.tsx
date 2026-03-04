@@ -21,6 +21,7 @@ import { downloadFile } from '@/lib/browser-utils';
 import { estimateTokens } from '@/lib/token-utils';
 import { buildUtterances, alignTrackersToUtterances, extractTrackerOccurrences } from '@/lib/tracker-alignment';
 import { performSurgery, formatExcerptsForAnalysis } from '@/lib/transcript-surgery';
+import type { GongCall, GongSession } from '@/types/gong';
 
 // 800K leaves headroom for system prompt + output within Gemini 2.5 Pro's ~1M token context window
 const TOKEN_BUDGET = 800_000;
@@ -76,9 +77,9 @@ type Stage = 'idle' | 'scoring' | 'scored' | 'analyzing' | 'results';
 // ─── Props ──────────────────────────────────────────────────────────────────
 
 interface AnalyzePanelProps {
-  selectedCalls: any[];
-  session: any;
-  allCalls: any[];
+  selectedCalls: GongCall[];
+  session: GongSession;
+  allCalls: GongCall[];
 }
 
 // ─── Template shortcuts ─────────────────────────────────────────────────────
@@ -243,14 +244,14 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         const speakerMap: Record<string, { name: string; title: string }> = {};
         const speakerDirectory: Array<{ speakerId: string; name: string; jobTitle: string; company: string; isInternal: boolean }> = [];
         for (const p of parties) {
-          const id = p.speakerId || p.userId || p.id;
+          const id = p.speakerId || p.userId;
           if (id) {
             const internal = isInternalParty(p, internalDomains);
             speakerInternalMap.set(id, internal);
             if (p.name) {
-              speakerMap[id] = { name: p.name, title: p.title || p.jobTitle || '' };
+              speakerMap[id] = { name: p.name, title: p.title || '' };
             }
-            const affiliation = p.affiliation || p.company || '';
+            const affiliation = p.affiliation || '';
             // Gong often leaves affiliation empty or as "External" for prospects.
             // Fall back to the call's account name for external speakers.
             const company =
@@ -263,7 +264,7 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
               speakerDirectory.push({
                 speakerId: id,
                 name: p.name,
-                jobTitle: p.title || p.jobTitle || '',
+                jobTitle: p.title || '',
                 company,
                 isInternal: internal,
               });
