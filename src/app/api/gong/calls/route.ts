@@ -1,12 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GongApiError, sleep, makeGongFetch, GONG_RATE_LIMIT_MS, EXTENSIVE_BATCH_SIZE } from '@/lib/gong-api';
+import type {
+  GongCall,
+  OutlineSection,
+  GongRawContextItem,
+  GongRawOutlineSection,
+  GongRawExtensiveCall,
+  GongRawBasicCall,
+  GongRawTracker,
+  GongPagedResponse,
+} from '@/types/gong';
+
+const strOrName = (v: { name?: string } | string | undefined): string =>
+  typeof v === 'string' ? v : v?.name || '';
 
 const DEFAULT_DAYS = 90;
 const CHUNK_DAYS = 30; // Gong API performs best with ≤30-day windows
 
 // Extract values from Gong's nested context.objects.fields structure
 function extractFieldValues(
-  context: any[] | undefined,
+  context: GongRawContextItem[] | undefined,
   fieldName: string,
   objectType?: string
 ): string[] {
@@ -37,40 +50,50 @@ function extractFieldValues(
   return values;
 }
 
-function normalizeOutline(structure: any[]): any[] {
-  return (structure || []).map((section: any) => ({
-    name: section.name,
+function normalizeOutline(structure: GongRawOutlineSection[]): OutlineSection[] {
+  return (structure || []).map((section) => ({
+    name: section.name || '',
     startTimeMs: (section.startTime || 0) * 1000,
     durationMs: (section.duration || 0) * 1000,
-    items: (section.items || []).map((item: any) => ({
-      text: item.text,
+    items: (section.items || []).map((item) => ({
+      text: item.text || '',
       startTimeMs: (item.startTime || 0) * 1000,
       durationMs: (item.duration || 0) * 1000,
     })),
   }));
 }
 
-function normalizeExtensiveCall(c: any): Record<string, any> {
+// Speaker counts + talkRatio are derived client-side, so the proxy emits
+// every GongCall field except those two.
+type NormalizedCall = Omit<GongCall, 'internalSpeakerCount' | 'externalSpeakerCount'>;
+
+function normalizeExtensiveCall(c: GongRawExtensiveCall): NormalizedCall {
   return {
-    id: c.metaData?.id || c.id,
+    id: c.metaData?.id || c.id || '',
     title: c.metaData?.title || c.title || 'Untitled Call',
-    started: c.metaData?.started || c.started,
+    started: c.metaData?.started || c.started || '',
     duration: c.metaData?.duration || c.duration || 0,
     url: c.metaData?.url,
     direction: c.metaData?.direction,
     parties: c.parties || [],
-    topics: (c.content?.topics || []).map((t: any) => t.name || t),
-    trackers: (c.content?.trackers || []).map((t: any) => t.name || ''),
-    trackerData: (c.content?.trackers || []).map((t: any) => ({
-      ...t,
-      occurrences: (t.occurrences || []).map((o: any) => ({
+    topics: (c.content?.topics || []).map(strOrName),
+    trackers: (c.content?.trackers || []).map((t) => t.name || ''),
+    trackerData: (c.content?.trackers || []).map((t: GongRawTracker) => ({
+      id: t.id,
+      name: t.name || '',
+      count: t.count,
+      occurrences: (t.occurrences || []).map((o) => ({
         ...o,
         startTimeMs: (o.startTime || 0) * 1000,
       })),
     })),
     brief: c.content?.brief || '',
-    keyPoints: (c.content?.keyPoints || []).map((kp: any) => kp.text || kp),
-    actionItems: (c.content?.actionItems || []).map((ai: any) => ai.snippet || ai),
+    keyPoints: (c.content?.keyPoints || []).map((kp) =>
+      typeof kp === 'string' ? kp : kp.text || ''
+    ),
+    actionItems: (c.content?.actionItems || []).map((ai) =>
+      typeof ai === 'string' ? ai : ai.snippet || ''
+    ),
     outline: normalizeOutline(c.content?.structure || []),
     questions: c.content?.questions || [],
     interactionStats: c.interaction || null,
@@ -145,7 +168,7 @@ export async function POST(request: NextRequest) {
       try {
         // Step 1: Fetch all call IDs across 30-day chunks, dedup by call ID
         const seenCallIds = new Set<string>();
-        const basicCalls: any[] = [];
+        const basicCalls: GongRawBasicCall[] = [];
         const chunks = buildDateChunks(fromDate, toDate);
 
         emit({ type: 'status', message: `Scanning ${chunks.length} date range${chunks.length > 1 ? 's' : ''}...` });
@@ -162,7 +185,7 @@ export async function POST(request: NextRequest) {
             if (workspaceId) params.set('workspaceId', workspaceId);
             if (cursor) params.set('cursor', cursor);
 
-            let data: any;
+            let data: GongPagedResponse<GongRawBasicCall>;
             try {
               data = await gongFetch(`/v2/calls?${params.toString()}`);
             } catch (err) {
@@ -172,7 +195,7 @@ export async function POST(request: NextRequest) {
               }
               throw err;
             }
-            const page: any[] = data.calls || [];
+            const page: GongRawBasicCall[] = data.calls || [];
 
             for (const call of page) {
               if (call.id && !seenCallIds.has(call.id)) {
@@ -199,7 +222,7 @@ export async function POST(request: NextRequest) {
           return;
         }
 
-        const callIds = basicCalls.map((c: any) => c.id).filter(Boolean);
+        const callIds = basicCalls.map((c) => c.id).filter((id): id is string => Boolean(id));
         const totalBatches = Math.ceil(callIds.length / EXTENSIVE_BATCH_SIZE);
 
         emit({ type: 'status', message: `Found ${callIds.length} calls. Loading details (${totalBatches} batches)...` });
@@ -213,11 +236,18 @@ export async function POST(request: NextRequest) {
           const batchNum = Math.floor(i / EXTENSIVE_BATCH_SIZE) + 1;
 
           try {
-            const batchExtensive: any[] = [];
+            const batchExtensive: GongRawExtensiveCall[] = [];
             let batchCursor: string | undefined;
 
             do {
-              const reqBody: any = {
+              const reqBody: {
+                filter: { callIds: string[] };
+                contentSelector: {
+                  exposedFields: { parties: boolean; content: Record<string, boolean> };
+                  context: string;
+                };
+                cursor?: string;
+              } = {
                 filter: { callIds: batch },
                 contentSelector: {
                   exposedFields: {
@@ -278,7 +308,7 @@ export async function POST(request: NextRequest) {
         // If extensive failed, fall back to basic data
         if (extensiveFailed) {
           console.warn('Extensive call data unavailable (403), falling back to basic call data');
-          const fallback = basicCalls.map((c: any) => ({
+          const fallback = basicCalls.map((c) => ({
             id: c.id,
             title: c.title || 'Untitled Call',
             started: c.started,

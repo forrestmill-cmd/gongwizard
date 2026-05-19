@@ -13,7 +13,12 @@ import {
   type CallForExport,
   type ExportOptions,
 } from '@/lib/transcript-formatter';
-import type { GongSession, GongCall } from '@/types/gong';
+import type { GongSession, GongCall, GongParty, TranscriptMonologue } from '@/types/gong';
+
+interface TranscriptResult {
+  callId: string;
+  transcript: TranscriptMonologue[];
+}
 
 interface UseCallExportParams {
   selectedIds: Set<string>;
@@ -47,20 +52,22 @@ export function useCallExport({
     if (!res.ok) throw new Error(data.error || 'Failed to fetch transcripts');
 
     const internalDomains: string[] = session.internalDomains || [];
-    const callMap = new Map(calls.map((c: any) => [c.id, c]));
+    const callMap = new Map(calls.map((c) => [c.id, c]));
 
-    return (data.transcripts || [])
-      .filter((t: any) => callMap.has(t.callId))
-      .map((t: any) => {
+    const transcripts: TranscriptResult[] = data.transcripts || [];
+    return transcripts
+      .filter((t) => callMap.has(t.callId))
+      .map((t) => {
         const callMeta = callMap.get(t.callId)!;
-        const parties: any[] = callMeta.parties || [];
+        const parties: GongParty[] = callMeta.parties || [];
 
         const speakerMap = new Map<string, Speaker>();
         for (const p of parties) {
           const internal = isInternalParty(p, internalDomains);
           const fullName = p.name || [p.firstName, p.lastName].filter(Boolean).join(' ') || 'Unknown';
-          speakerMap.set(p.speakerId || p.userId || p.id, {
-            speakerId: p.speakerId || p.userId || p.id,
+          const speakerId = p.speakerId || p.userId || p.id || '';
+          speakerMap.set(speakerId, {
+            speakerId,
             name: fullName,
             firstName: p.firstName || fullName.split(' ')[0],
             isInternal: internal,
@@ -108,12 +115,12 @@ export function useCallExport({
         ? `gong-utterances-${format(new Date(), 'yyyy-MM-dd')}.csv`
         : `gong-transcripts-${format(new Date(), 'yyyy-MM-dd')}.${extension}`;
       downloadFile(content, filename, mimeType);
-    } catch (err: any) {
-      alert(err.message || 'Export failed');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Export failed');
     } finally {
       setExporting(false);
     }
-  }, [selectedIds, exportFormat, exportOpts, fetchTranscriptsForSelected]);
+  }, [selectedIds, exportFormat, exportOpts, fetchTranscriptsForSelected, calls]);
 
   const handleCopy = useCallback(async () => {
     if (selectedIds.size === 0) return;
@@ -124,12 +131,12 @@ export function useCallExport({
       await navigator.clipboard.writeText(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch (err: any) {
-      alert(err.message || 'Copy failed');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Copy failed');
     } finally {
       setExporting(false);
     }
-  }, [selectedIds, exportFormat, exportOpts, fetchTranscriptsForSelected]);
+  }, [selectedIds, exportFormat, exportOpts, fetchTranscriptsForSelected, calls]);
 
   const handleZipExport = useCallback(async () => {
     if (selectedIds.size === 0) return;
@@ -176,8 +183,8 @@ export function useCallExport({
 
       const blob = await downloadZip(files).blob();
       downloadBlob(blob, `gong-export-${format(exportDate, 'yyyy-MM-dd')}.zip`);
-    } catch (err: any) {
-      alert(err.message || 'ZIP export failed');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'ZIP export failed');
     } finally {
       setExporting(false);
     }

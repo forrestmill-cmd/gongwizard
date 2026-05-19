@@ -1,4 +1,5 @@
 // Shared formatting utilities
+import type { GongParty } from '@/types/gong';
 
 export function formatDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -9,7 +10,7 @@ export function formatDuration(seconds: number): string {
   return `${s}s`;
 }
 
-export function isInternalParty(party: any, internalDomains: string[]): boolean {
+export function isInternalParty(party: GongParty, internalDomains: string[]): boolean {
   if (party.affiliation === 'Internal') return true;
   const email: string = party.emailAddress || '';
   const domain = email.includes('@') ? email.split('@')[1]?.toLowerCase() : '';

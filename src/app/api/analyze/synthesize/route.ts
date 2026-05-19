@@ -3,9 +3,30 @@ import { smartCompleteJSON } from '@/lib/ai-providers';
 
 export const maxDuration = 60;
 
+interface RawFinding {
+  exact_quote?: string;
+  speaker_name?: string;
+  job_title?: string;
+  company?: string;
+  is_external?: boolean;
+  timestamp?: string;
+  context?: string;
+}
+
+interface CallFindings {
+  callId?: string;
+  callTitle?: string;
+  callDate?: string;
+  account?: string;
+  findings?: RawFinding[];
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = (await request.json()) as {
+      question?: string;
+      allFindings?: CallFindings[];
+    };
     const { question, allFindings } = body;
 
     if (!question || !allFindings || !Array.isArray(allFindings)) {
@@ -15,12 +36,12 @@ export async function POST(request: NextRequest) {
     // allFindings: [{ callId, callTitle, callDate, account, findings[] }]
     // findings now include: exact_quote, speaker_name, job_title, company, is_external, timestamp, context
     const findingsSummary = allFindings
-      .filter((cf: any) => cf.findings?.some((f: any) => f.is_external))
-      .map((cf: any) => {
-        const externalFindings = cf.findings.filter((f: any) => f.is_external);
+      .filter((cf: CallFindings) => cf.findings?.some((f) => f.is_external))
+      .map((cf: CallFindings) => {
+        const externalFindings = (cf.findings || []).filter((f) => f.is_external);
         const findingTexts = externalFindings
           .map(
-            (f: any) =>
+            (f) =>
               `  - "${f.exact_quote}" — ${f.speaker_name}${f.job_title ? `, ${f.job_title}` : ''}${f.company ? ` at ${f.company}` : ''}`
           )
           .join('\n');

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { makeGongFetch, TRANSCRIPT_BATCH_SIZE, GONG_RATE_LIMIT_MS, sleep } from '@/lib/gong-api';
 import { formatTimestamp } from '@/lib/format-utils';
+import type { TranscriptSentence } from '@/types/gong';
 
 export async function POST(request: NextRequest) {
   const authHeader = request.headers.get('X-Gong-Auth');
@@ -38,7 +39,7 @@ export async function POST(request: NextRequest) {
 
           for (const ct of (result.callTranscripts || [])) {
             for (const monologue of (ct.transcript || [])) {
-              const sentences: any[] = monologue.sentences || [];
+              const sentences: TranscriptSentence[] = monologue.sentences || [];
               for (let j = 0; j < sentences.length; j++) {
                 const sentence = sentences[j];
                 if (sentence.text?.toLowerCase().includes(lowerKeyword)) {

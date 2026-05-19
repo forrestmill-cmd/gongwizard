@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GongApiError, sleep, makeGongFetch, handleGongError, GONG_RATE_LIMIT_MS } from '@/lib/gong-api';
+import type { GongUser } from '@/types/gong';
 
 export async function POST(request: NextRequest) {
   try {
@@ -66,7 +67,7 @@ export async function POST(request: NextRequest) {
       : [];
 
     const domainSet = new Set<string>();
-    for (const user of users as any[]) {
+    for (const user of users as GongUser[]) {
       const email = user.emailAddress || '';
       if (email.includes('@')) {
         domainSet.add(email.split('@').pop()!.trim().toLowerCase());

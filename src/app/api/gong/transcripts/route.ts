@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sleep, makeGongFetch, handleGongError, GONG_RATE_LIMIT_MS, TRANSCRIPT_BATCH_SIZE } from '@/lib/gong-api';
+import type { TranscriptMonologue } from '@/types/gong';
+
+interface RawCallTranscript {
+  callId?: string;
+  transcript?: TranscriptMonologue[];
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -18,14 +24,14 @@ export async function POST(request: NextRequest) {
     const baseUrl = (rawBaseUrl || 'https://api.gong.io').replace(/\/+$/, '');
     const gongFetch = makeGongFetch(baseUrl, authHeader);
 
-    const transcriptMap: Record<string, any[]> = {};
+    const transcriptMap: Record<string, TranscriptMonologue[]> = {};
 
     for (let i = 0; i < callIds.length; i += TRANSCRIPT_BATCH_SIZE) {
       const batch = callIds.slice(i, i + TRANSCRIPT_BATCH_SIZE);
       let cursor: string | undefined;
 
       do {
-        const reqBody: any = {
+        const reqBody: { filter: { callIds: string[] }; cursor?: string } = {
           filter: { callIds: batch },
         };
         if (cursor) reqBody.cursor = cursor;
@@ -35,7 +41,7 @@ export async function POST(request: NextRequest) {
           body: JSON.stringify(reqBody),
         });
 
-        const callTranscripts: any[] = data.callTranscripts || [];
+        const callTranscripts: RawCallTranscript[] = data.callTranscripts || [];
         for (const ct of callTranscripts) {
           const id = ct.callId;
           if (!id) continue;

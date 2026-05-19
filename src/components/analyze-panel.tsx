@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -21,7 +20,7 @@ import { downloadFile } from '@/lib/browser-utils';
 import { estimateTokens } from '@/lib/token-utils';
 import { buildUtterances, alignTrackersToUtterances, extractTrackerOccurrences } from '@/lib/tracker-alignment';
 import { performSurgery, formatExcerptsForAnalysis } from '@/lib/transcript-surgery';
-import type { GongCall, GongSession } from '@/types/gong';
+import type { GongCall, GongSession, TranscriptMonologue } from '@/types/gong';
 
 // 800K leaves headroom for system prompt + output within Gemini 2.5 Pro's ~1M token context window
 const TOKEN_BUDGET = 800_000;
@@ -169,9 +168,10 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Scoring failed');
 
-      const scored = (data.scores || [])
-        .sort((a: any, b: any) => b.score - a.score)
-        .map((s: any) => ({ ...s, selected: s.score >= 3 }));
+      const rawScores = (data.scores || []) as Omit<ScoredCall, 'selected'>[];
+      const scored: ScoredCall[] = rawScores
+        .sort((a, b) => b.score - a.score)
+        .map((s) => ({ ...s, selected: s.score >= 3 }));
 
       setScoredCalls(scored);
       setStage('scored');
@@ -210,8 +210,12 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
       const transcriptData = await transcriptRes.json();
       if (!transcriptRes.ok) throw new Error(transcriptData.error || 'Failed to fetch transcripts');
 
-      const transcriptMap = new Map<string, any[]>();
-      for (const t of transcriptData.transcripts || []) {
+      const transcriptMap = new Map<string, TranscriptMonologue[]>();
+      const rawTranscripts = (transcriptData.transcripts || []) as Array<{
+        callId: string;
+        transcript: TranscriptMonologue[];
+      }>;
+      for (const t of rawTranscripts) {
         transcriptMap.set(t.callId, t.transcript);
       }
 
@@ -328,12 +332,12 @@ export default function AnalyzePanel({ selectedCalls, session, allCalls }: Analy
         );
 
         // Prepend speaker directory to processed data for follow-up context
-        const externalSpeakers = speakerDirectory.filter((s: any) => !s.isInternal);
+        const externalSpeakers = speakerDirectory.filter((s) => !s.isInternal);
         const speakerHeader =
           externalSpeakers.length > 0
             ? `External speakers:\n${externalSpeakers
                 .map(
-                  (s: any) =>
+                  (s) =>
                     `- ${s.name}${s.jobTitle ? `, ${s.jobTitle}` : ''}${s.company ? ` at ${s.company}` : ''}`
                 )
                 .join('\n')}\n\n`

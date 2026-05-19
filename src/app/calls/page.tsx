@@ -26,7 +26,7 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { MultiSelect, type MultiSelectOption } from '@/components/ui/multi-select';
+import { MultiSelect } from '@/components/ui/multi-select';
 import { format } from 'date-fns';
 import { formatDuration, isInternalParty, truncateToFirstSentence } from '@/lib/format-utils';
 import {
@@ -45,7 +45,26 @@ import { type ExportOptions } from '@/lib/transcript-formatter';
 import { useCallExport } from '@/hooks/useCallExport';
 import { useFilterState } from '@/hooks/useFilterState';
 import { getSession } from '@/lib/session';
-import { GongCall, GongSession } from '@/types/gong';
+import { GongCall, GongSession, GongParty, SessionTracker, GongWorkspace } from '@/types/gong';
+
+// What the /api/gong/calls NDJSON stream actually emits per call: the
+// normalized shape, or the basic-fallback shape (which carries metaData and
+// may carry Gong `highlights`). id is always set by the proxy.
+type IncomingCall = Partial<GongCall> & {
+  id: string;
+  metaData?: { accountName?: string };
+  highlights?: { brief?: string };
+};
+
+interface GongStreamEvent {
+  type?: 'status' | 'calls' | 'progress' | 'done' | 'error';
+  message?: string;
+  batch?: number;
+  totalBatches?: number;
+  callsProcessed?: number;
+  totalCalls?: number;
+  calls?: IncomingCall[];
+}
 
 const FORMAT_OPTIONS = [
   { value: 'markdown',      label: 'Markdown',      desc: 'Upload to ChatGPT or Claude' },
@@ -88,7 +107,6 @@ function CallCard({
   transcriptKeyword,
   getMatchAffiliation,
   activeTrackers,
-  activeTopics,
 }: {
   call: GongCall;
   isSelected: boolean;
@@ -99,7 +117,6 @@ function CallCard({
   transcriptKeyword: string;
   getMatchAffiliation: (speakerId: string, call: GongCall) => 'internal' | 'external';
   activeTrackers: Set<string>;
-  activeTopics: Set<string>;
 }) {
   const callDate = call.started ? format(new Date(call.started), 'MMM d, yyyy') : '';
   return (
@@ -279,7 +296,7 @@ export default function CallsPage() {
   // Prefer session trackers for chip display (curated, manageable count).
   // Fall back to call-derived trackers if session has none.
   const allTrackers: string[] = useMemo(() => {
-    const sessionNames = (session?.trackers || []).map((t: any) => t.name || t.id || String(t)).filter(Boolean);
+    const sessionNames = (session?.trackers || []).map((t: SessionTracker) => t.name || t.id || String(t)).filter(Boolean);
     if (sessionNames.length > 0) return sessionNames;
     // Fallback: derive from call data
     const names = new Set<string>();
@@ -395,9 +412,9 @@ export default function CallsPage() {
       let buffer = '';
       const internalDomains: string[] = session.internalDomains || [];
 
-      function processCalls(rawCalls: any[]): GongCall[] {
-        return rawCalls.map((call: any) => {
-          const parties: any[] = call.parties || [];
+      function processCalls(rawCalls: IncomingCall[]): GongCall[] {
+        return rawCalls.map((call) => {
+          const parties: GongParty[] = call.parties || [];
           let internalCount = 0;
           let externalCount = 0;
           for (const p of parties) {
@@ -407,7 +424,7 @@ export default function CallsPage() {
           return {
             id: call.id,
             title: call.title || 'Untitled Call',
-            started: call.started,
+            started: call.started || '',
             duration: call.duration || 0,
             accountName: call.metaData?.accountName || call.accountName || '',
             topics: call.topics || [],
@@ -415,7 +432,7 @@ export default function CallsPage() {
             trackerData: call.trackerData || [],
             brief: call.brief || call.highlights?.brief || '',
             parties,
-            interactionStats: call.interactionStats,
+            interactionStats: call.interactionStats ?? null,
             internalSpeakerCount: internalCount,
             externalSpeakerCount: externalCount,
             talkRatio: call.interactionStats?.talkRatio ?? undefined,
@@ -440,16 +457,16 @@ export default function CallsPage() {
 
         for (const line of lines) {
           if (!line.trim()) continue;
-          let event: any;
+          let event: GongStreamEvent;
           try { event = JSON.parse(line); } catch { continue; }
 
           switch (event.type) {
             case 'status':
-              setLoadStatus(event.message);
+              setLoadStatus(event.message ?? '');
               break;
             case 'progress':
-              setLoadProgress({ batch: event.batch, totalBatches: event.totalBatches });
-              setLoadStatus(`Loading details... ${event.callsProcessed}/${event.totalCalls} calls`);
+              setLoadProgress({ batch: event.batch ?? 0, totalBatches: event.totalBatches ?? 0 });
+              setLoadStatus(`Loading details... ${event.callsProcessed ?? 0}/${event.totalCalls ?? 0} calls`);
               break;
             case 'calls': {
               const processed = processCalls(event.calls || []);
@@ -461,7 +478,7 @@ export default function CallsPage() {
               setLoadStatus('');
               break;
             case 'error':
-              setLoadError(event.message);
+              setLoadError(event.message ?? 'Load failed');
               break;
           }
         }
@@ -503,7 +520,7 @@ export default function CallsPage() {
   function getMatchAffiliation(speakerId: string, call: GongCall): 'internal' | 'external' {
     const domains: string[] = session?.internalDomains || [];
     const party = (call.parties || []).find(
-      (p: any) => (p.speakerId || p.userId || p.id) === speakerId
+      (p: GongParty) => (p.speakerId || p.userId || p.id) === speakerId
     );
     return party && isInternalParty(party, domains) ? 'internal' : 'external';
   }
@@ -769,7 +786,7 @@ export default function CallsPage() {
                         className="w-full h-8 rounded-md border bg-background px-2 text-sm"
                       >
                         <option value="">All workspaces</option>
-                        {session.workspaces.map((ws: any) => (
+                        {session.workspaces.map((ws: GongWorkspace) => (
                           <option key={ws.id} value={ws.id}>{ws.name || ws.id}</option>
                         ))}
                       </select>
@@ -967,7 +984,6 @@ export default function CallsPage() {
                 transcriptKeyword={transcriptKeyword}
                 getMatchAffiliation={getMatchAffiliation}
                 activeTrackers={filters.activeTrackers}
-                activeTopics={filters.activeTopics}
               />
             ))}
           </div>

@@ -1,4 +1,5 @@
 // Pure filter predicates for call list filtering
+import type { GongParty } from '@/types/gong';
 
 interface FilterableCall {
   title: string;
@@ -6,7 +7,7 @@ interface FilterableCall {
   duration: number;
   topics?: string[];
   trackers?: string[];
-  parties?: any[];
+  parties?: GongParty[];
   externalSpeakerCount: number;
   talkRatio?: number;
   keyPoints?: string[];
@@ -48,7 +49,7 @@ export function matchesTalkRatioRange(call: FilterableCall, min: number, max: nu
 export function matchesParticipantName(call: FilterableCall, query: string): boolean {
   if (!query.trim()) return true;
   const q = query.toLowerCase();
-  return (call.parties || []).some((p: any) => {
+  return (call.parties || []).some((p) => {
     const name = [p.name, p.firstName, p.lastName].filter(Boolean).join(' ').toLowerCase();
     return name.includes(q);
   });

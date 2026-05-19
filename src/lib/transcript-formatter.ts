@@ -231,7 +231,7 @@ export function buildJSONL(calls: CallForExport[], opts: ExportOptions): string 
       let turns = call.turns;
       if (opts.condenseMonologues) turns = truncateLongInternalTurns(turns);
 
-      const obj: any = {
+      const obj: Record<string, unknown> = {
         id: call.id,
         title: call.title,
         date: call.date,
@@ -352,11 +352,17 @@ export function buildUtteranceCSV(calls: CallForExport[], allCalls: GongCall[]):
     const trackerOccs = extractTrackerOccurrences(rawCall?.trackerData || []);
     alignTrackersToUtterances(utterances, trackerOccs);
 
-    const outline: OutlineSection[] = (rawCall?.outline || []).map((o: any) => ({
+    const outline: OutlineSection[] = (rawCall?.outline || []).map((o: {
+      section?: string;
+      name?: string;
+      startTime?: number;
+      duration?: number;
+      items?: Array<{ text?: string; name?: string; startTime?: number; duration?: number }>;
+    }) => ({
       name: o.section || o.name || '',
       startTimeMs: (o.startTime || 0) * 1000,
       durationMs: (o.duration || 0) * 1000,
-      items: (o.items || []).map((item: any) => ({
+      items: (o.items || []).map((item) => ({
         text: item.text || item.name || '',
         startTimeMs: (item.startTime || 0) * 1000,
         durationMs: (item.duration || 0) * 1000,

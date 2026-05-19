@@ -17,7 +17,7 @@ export interface GongCall {
   outline: OutlineSection[];
   questions: GongQuestion[];
   interactionStats: InteractionStats | null;
-  context: any[];
+  context: GongRawContextItem[];
   accountName: string;
   accountIndustry: string;
   accountWebsite: string;
@@ -27,8 +27,11 @@ export interface GongCall {
 }
 
 export interface GongParty {
+  id?: string;
   speakerId?: string;
   name?: string;
+  firstName?: string;
+  lastName?: string;
   title?: string;
   emailAddress?: string;
   affiliation?: string; // 'Internal' | 'External' | 'Unknown'
@@ -143,4 +146,88 @@ export interface SynthesisTheme {
   frequency: number;
   representativeQuotes: string[];
   callIds: string[];
+}
+
+// ── Raw Gong API response shapes ─────────────────────────────────────────────
+// Loosely-structured external JSON that the proxy routes normalize into the
+// strict interfaces above. Optional everywhere because Gong omits empty fields.
+
+export interface GongRawField {
+  name?: string;
+  value?: unknown;
+}
+
+export interface GongRawContextObject {
+  objectType?: string;
+  objectId?: string | number;
+  fields?: GongRawField[];
+}
+
+export interface GongRawContextItem {
+  objects?: GongRawContextObject[];
+}
+
+export interface GongRawOutlineItem {
+  text?: string;
+  startTime?: number;
+  duration?: number;
+}
+
+export interface GongRawOutlineSection {
+  name?: string;
+  startTime?: number;
+  duration?: number;
+  items?: GongRawOutlineItem[];
+}
+
+export interface GongRawTrackerOccurrence {
+  startTime?: number;
+  speakerId?: string;
+  phrase?: string;
+}
+
+export interface GongRawTracker {
+  id?: string;
+  name?: string;
+  count?: number;
+  occurrences?: GongRawTrackerOccurrence[];
+}
+
+export interface GongRawExtensiveCall {
+  id?: string;
+  title?: string;
+  started?: string;
+  duration?: number;
+  metaData?: {
+    id?: string;
+    title?: string;
+    started?: string;
+    duration?: number;
+    url?: string;
+    direction?: string;
+  };
+  parties?: GongParty[];
+  content?: {
+    topics?: Array<{ name?: string } | string>;
+    trackers?: GongRawTracker[];
+    brief?: string;
+    keyPoints?: Array<{ text?: string } | string>;
+    actionItems?: Array<{ snippet?: string } | string>;
+    structure?: GongRawOutlineSection[];
+    questions?: GongQuestion[];
+  };
+  interaction?: InteractionStats | null;
+  context?: GongRawContextItem[];
+}
+
+export interface GongRawBasicCall {
+  id?: string;
+  title?: string;
+  started?: string;
+  duration?: number;
+}
+
+export interface GongPagedResponse<T> {
+  calls?: T[];
+  records?: { cursor?: string };
 }

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cheapCompleteJSON } from '@/lib/ai-providers';
+import type { GongCall } from '@/types/gong';
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = (await request.json()) as { question?: string; calls?: GongCall[] };
     const { question, calls } = body;
 
     if (!question || !calls || !Array.isArray(calls)) {
@@ -20,16 +21,14 @@ For each call, return a score 0-10, a one-sentence reason, and the section names
 Return JSON exactly: { "scores": [{ "callId": "...", "score": 0-10, "reason": "one sentence", "relevant_sections": ["section name", ...] }] }
 Include all ${calls.length} calls in the scores array in the same order.
 
-${calls.map((call: any, i: number) => {
-  const trackerNames = (call.trackers || [])
-    .map((t: any) => t.name || t)
-    .filter(Boolean);
+${calls.map((call: GongCall, i: number) => {
+  const trackerNames = (call.trackers || []).filter(Boolean);
 
   const outlineSummary = (call.outline || [])
-    .filter((s: any) => s.name)
-    .map((s: any) => {
+    .filter((s) => s.name)
+    .map((s) => {
       const items = (s.items || [])
-        .map((item: any) => item.text)
+        .map((item) => item.text)
         .filter(Boolean)
         .slice(0, 3)
         .map((t: string) => `    • ${t.slice(0, 100)}`)
@@ -60,7 +59,7 @@ ${outlineSummary || 'None'}`;
         }>;
       }>(prompt, { temperature: 0.2, maxTokens: 4096 });
 
-      const normalizedScores = (result.scores || []).map((s: any) => ({
+      const normalizedScores = (result.scores || []).map((s) => ({
         callId: s.callId,
         score: Math.max(0, Math.min(10, s.score || 0)),
         reason: s.reason || '',
@@ -70,9 +69,9 @@ ${outlineSummary || 'None'}`;
       return NextResponse.json({ scores: normalizedScores });
     } catch (err) {
       console.error('Batch scoring failed, returning neutral scores:', err);
-      const fallbackScores = calls.map((call: any) => {
+      const fallbackScores = calls.map((call: GongCall) => {
         const outlineSections = (call.outline || [])
-          .map((s: any) => s.name)
+          .map((s) => s.name)
           .filter(Boolean);
         return {
           callId: call.id,
