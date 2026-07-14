@@ -168,11 +168,11 @@ interface GongWorkspace {
 
 **Error responses:**
 
-| Status | Body                                                                        |
-| ------ | --------------------------------------------------------------------------- |
-| 401    | `{ "error": "Missing credentials" }` — `X-Gong-Auth` absent                 |
-| 401    | `{ "error": "Invalid API credentials" }` — Gong returned 401 on users fetch |
-| 500    | `{ "error": "Internal server error" }`                                      |
+| Status | Body |
+| ------ | ---- |
+| 401 | `{ "error": "Missing credentials" }` — `X-Gong-Auth` absent |
+| 401 | `{ "error": "Invalid API credentials" }` — Gong returned 401 on users fetch |
+| 500 | `{ "error": "Internal server error" }` |
 
 **Notable behavior:**
 
@@ -229,7 +229,7 @@ Falls back to basic call data if `/v2/calls/extensive` returns 403.
 { type: "error"; message: string }
 ```
 
-`NormalizedCall` is the output of `normalizeExtensiveCall()`:
+`NormalizedCall` is the output of `normalizeExtensiveCall()` and `normalizeOutline()` in `src/app/api/gong/calls/route.ts`:
 
 ```typescript
 {
@@ -306,7 +306,7 @@ interface InteractionStats {
 
 **File:** `src/app/api/gong/transcripts/route.ts`
 
-Fetches full transcript monologues for a list of call IDs. Used by `useCallExport` hook before rendering any export format. Calls `POST /v2/calls/transcript` in batches of 50, handles cursor pagination within each batch, and merges all monologues per call.
+Fetches full transcript monologues for a list of call IDs. Used by the `useCallExport` hook before rendering any export format. Calls `POST /v2/calls/transcript` in batches of 50, handles cursor pagination within each batch, and merges all monologues per call.
 
 **Request headers:**
 
@@ -344,8 +344,8 @@ interface TranscriptMonologue {
 
 interface TranscriptSentence {
   text: string;
-  start: number;   // milliseconds from call start
-  end?: number;    // milliseconds from call start
+  start: number;   // seconds from call start (Gong native unit)
+  end?: number;    // seconds from call start
 }
 ```
 
@@ -438,7 +438,7 @@ Case-insensitive keyword substring search across transcript sentences for a set 
 
 **File:** `src/app/api/analyze/score/route.ts`
 
-**AI model:** `gemini-2.0-flash-lite` via `cheapCompleteJSON` from `src/lib/ai-providers.ts`.
+**AI model:** `gemini-2.5-flash-lite` via `cheapCompleteJSON` from `src/lib/ai-providers.ts`.
 
 Stage 1 of the four-stage analysis pipeline. Scores all candidate calls for relevance to a research question using call metadata only — no transcript content is sent. Identifies which calls to analyze and which outline sections to focus on.
 
@@ -496,7 +496,7 @@ Stage 1 of the four-stage analysis pipeline. Scores all candidate calls for rele
 
 **File:** `src/app/api/analyze/process/route.ts`
 
-**AI model:** `gemini-2.0-flash-lite` via `cheapCompleteJSON` from `src/lib/ai-providers.ts`.
+**AI model:** `gemini-2.5-flash-lite` via `cheapCompleteJSON` from `src/lib/ai-providers.ts`.
 
 Stage 2 sub-step. Compresses long internal rep monologues flagged by `performSurgery()` in `src/lib/transcript-surgery.ts` (those with `needsSmartTruncation: true`) down to sentences relevant to the research question. The prompt is built by `buildSmartTruncationPrompt(question, monologues)`. All long monologues for a single call are batched into one AI request.
 
@@ -607,24 +607,48 @@ Returns `{ "findings": [] }` when no relevant external speaker evidence is found
 
 Stage 3 (multi-call path). Extracts findings from multiple calls in a single AI prompt. All call sections are concatenated under `=== CALL [callId]: title | date ===` headers. A shared external speaker directory header is prepended listing all external speakers across all calls.
 
+**Internal types defined in the route file:**
+
+```typescript
+interface SpeakerEntry {
+  speakerId: string;
+  name: string;
+  jobTitle: string;
+  company: string;
+  isInternal: boolean;
+}
+
+interface CallPayload {
+  callId: string;
+  callData: string;
+  brief: string;
+  speakerDirectory: SpeakerEntry[];
+  callMeta: { title: string; date: string };
+}
+
+interface Finding {
+  exact_quote: string;
+  speaker_name: string;
+  job_title: string;
+  company: string;
+  is_external: boolean;
+  timestamp: string;
+  context: string;
+  significance: "high" | "medium" | "low";
+  finding_type: "objection" | "need" | "competitive" | "question" | "feedback";
+}
+
+interface BatchResult {
+  results: { [callId: string]: { findings: Finding[] } };
+}
+```
+
 **Request body:**
 
 ```typescript
 {
   question: string;
-  calls: Array<{
-    callId: string;
-    callData: string;           // pre-formatted transcript excerpts
-    brief: string;
-    speakerDirectory: Array<{
-      speakerId: string;
-      name: string;
-      jobTitle: string;
-      company: string;
-      isInternal: boolean;
-    }>;
-    callMeta: { title: string; date: string };
-  }>;
+  calls: CallPayload[];
 }
 ```
 
@@ -636,17 +660,7 @@ Stage 3 (multi-call path). Extracts findings from multiple calls in a single AI 
 {
   results: {
     [callId: string]: {
-      findings: Array<{
-        exact_quote: string;
-        speaker_name: string;
-        job_title: string;
-        company: string;
-        is_external: boolean;
-        timestamp: string;
-        context: string;
-        significance: "high" | "medium" | "low";
-        finding_type: "objection" | "need" | "competitive" | "question" | "feedback";
-      }>
+      findings: Finding[]
     }
   }
 }
@@ -813,13 +827,12 @@ All proxy routes share these constants and helpers:
 | `GONG_RATE_LIMIT_MS`                 | `350`        | ms sleep between paginated/batched requests |
 | `EXTENSIVE_BATCH_SIZE`               | `10`         | max IDs per `/v2/calls/extensive` request   |
 | `TRANSCRIPT_BATCH_SIZE`              | `50`         | max IDs per `/v2/calls/transcript` request  |
-| `MAX_RETRIES`                        | `5`          | max retry attempts with exponential backoff |
 | `makeGongFetch(baseUrl, authHeader)` | function     | Returns a fetch wrapper with retry logic    |
 | `handleGongError(error)`             | function     | Maps `GongApiError` to `NextResponse`       |
 | `GongApiError`                       | class        | `status: number`, `endpoint: string`        |
 | `sleep(ms)`                          | function     | Promise-based delay                         |
 
-`makeGongFetch` applies exponential backoff (`Math.min(2^attempt * 2, 30) * 1000` ms) up to `MAX_RETRIES` times for 429 and 5xx responses. 401, 403, and 404 are thrown immediately without retry as `GongApiError`.
+`makeGongFetch` applies exponential backoff (`Math.min(2^attempt * 2, 30) * 1000` ms) up to 5 retry attempts for 429 and 5xx responses. 401, 403, and 404 are thrown immediately without retry as `GongApiError`.
 
 ---
 
@@ -831,7 +844,7 @@ The `GoogleGenAI` client is lazy-initialized from `process.env.GEMINI_API_KEY`.
 
 | Function            | Model                   | JSON mode                                    | Default maxTokens | Used by routes                               |
 | ------------------- | ----------------------- | -------------------------------------------- | ----------------- | -------------------------------------------- |
-| `cheapCompleteJSON` | `gemini-2.0-flash-lite` | Yes (`responseMimeType: 'application/json'`) | 1024              | `score`, `process`                           |
+| `cheapCompleteJSON` | `gemini-2.5-flash-lite` | Yes (`responseMimeType: 'application/json'`) | 1024              | `score`, `process`                           |
 | `smartCompleteJSON` | `gemini-2.5-pro`        | Yes                                          | 8192              | `run`, `batch-run`, `synthesize`, `followup` |
 | `smartStream`       | `gemini-2.5-pro`        | No                                           | 8192              | Defined; not used by any current route       |
 
