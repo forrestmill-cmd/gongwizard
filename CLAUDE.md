@@ -57,6 +57,8 @@ Web app that helps Gong customers export call transcripts optimized for AI analy
 
 Stateless — no database, credentials in sessionStorage only.
 
+**Vercel build gate (2026-07-15):** `vercel.json`'s `ignoreCommand` runs `bash scripts/ci/vercel-ignore-build.sh` — a path-aware gate that skips production builds for docs-only commits (docs/, handoffs/, root *.md) via tokenless `git diff PREV..HEAD` + fail-open. Allowlist/classifier in `scripts/ci/deploy-paths.mjs`; guardrail `node scripts/ci/deploy-paths.test.mjs`. Do NOT make it skip-biased. Full design: BingWow's `docs/VERCEL-BUILD-GATE.md`.
+
 ## Key Paths
 
 ### Pages & Middleware
