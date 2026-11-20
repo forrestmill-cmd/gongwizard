@@ -1,7 +1,24 @@
 # GongWizard Generated Documentation
 
 Auto-generated from source code using Repomix + Claude.
-Last updated: 2026-03-04
+Last updated: 2026-03-04 — **STALE. Regenerate with `/doc-update` before trusting
+anything structural here.**
+
+> **2026-11-20 hand-patch, and why it was needed.** These docs described
+> `gemini-2.0-flash-lite` for ~8 months — the 2026-03-04 commit that fixed the
+> code ("replace deprecated gemini-2.0 models") never regenerated them, so the
+> doc stayed a fossil of that incident and was still naming a retired model
+> while the code ran a different one. On 2026-11-20 the smart tier moved off
+> `gemini-2.5-pro` (deprecated 2026-11-02), and rather than leave a second
+> fossil the model names were patched by hand across architecture-overview,
+> api-routes, configuration-reference, data-flows and lib-modules.
+>
+> That patch covers MODEL NAMES ONLY. Everything else predates 2026-11-20 and
+> is known stale — in particular `smartStream` was **deleted** (zero callers),
+> and model ids + the per-generation request shape now live in
+> `src/lib/gemini-generation-shape.ts`, which these docs do not mention at all.
+> `recent-changes.md` is a git-log record and is deliberately left untouched.
+> See "Gemini model pinning" in the root `CLAUDE.md` for the current contract.
 
 ## Documents
 

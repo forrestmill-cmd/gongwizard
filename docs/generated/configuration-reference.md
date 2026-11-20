@@ -251,7 +251,7 @@ Defined in `src/lib/ai-providers.ts`:
 | Tier | Model ID | Default `temperature` | Default `maxOutputTokens` |
 | --- | --- | --- | --- |
 | Cheap (`cheapComplete` / `cheapCompleteJSON`) | `'gemini-2.5-flash-lite'` | `0.3` | `1024` |
-| Smart (`smartComplete` / `smartCompleteJSON` / `smartStream`) | `'gemini-2.5-pro'` | `0.3` | `8192` |
+| Smart (`smartComplete` / `smartCompleteJSON` / `smartStream`) | `'gemini-3.8-flash'` | `0.3` | `8192` |
 
 All JSON-returning calls pass `responseMimeType: 'application/json'` to the Gemini API (native structured output mode), enabled by `jsonMode: true` internally.
 
@@ -294,7 +294,7 @@ All proxy routes accept an optional `baseUrl` field in the POST body (trailing s
 | SDK package | `@google/genai` `^1.43.0` |
 | Client initialization | `src/lib/ai-providers.ts` — module-level lazy singleton: `let _gemini: GoogleGenAI \| null = null`, initialized on first `getGemini()` call as `new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })` |
 | Cheap tier model | `'gemini-2.5-flash-lite'` — invoked by `cheapCompleteJSON` |
-| Smart tier model | `'gemini-2.5-pro'` — invoked by `smartCompleteJSON` and `smartStream` |
+| Smart tier model | `'gemini-3.8-flash'` — invoked by `smartCompleteJSON` and `smartStream` |
 | Server-side only | Yes — `GEMINI_API_KEY` is only available server-side; never sent to the browser |
 
 ```mermaid
@@ -309,7 +309,7 @@ graph TD
     E --> I
     I -->|GEMINI_API_KEY| J[GoogleGenAI singleton]
     J -->|gemini-2.5-flash-lite| K[Cheap tier]
-    J -->|gemini-2.5-pro| L[Smart tier]
+    J -->|gemini-3.8-flash| L[Smart tier]
 ```
 
 ---

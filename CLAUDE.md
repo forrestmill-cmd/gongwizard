@@ -26,9 +26,49 @@ Web app that helps Gong customers export call transcripts optimized for AI analy
 - **Rate limiting**: 350 ms delay between paginated/batched Gong API requests in all proxy routes. Exponential backoff with up to 5 retries.
 - **SessionStorage key**: `gongwizard_session` holds `authHeader`, `users`, `trackers`, `workspaces`, `internalDomains`, `baseUrl`. Cleared when tab closes.
 - **LocalStorage key**: `gongwizard_filters` persists numeric/boolean filter state (duration range, talk ratio range, excludeInternal, minExternalSpeakers) across page reloads.
-- **AI research pipeline**: `AnalyzePanel` runs a four-stage pipeline — (1) score calls for relevance via `gemini-2.5-flash-lite`, (2) surgical transcript extraction reducing full transcripts to dense evidence, (3) finding extraction via `gemini-2.5-pro`, (4) synthesis + follow-up Q&A. All via `/api/analyze/*` routes. Credentials: `GEMINI_API_KEY` server-side only.
+- **AI research pipeline**: `AnalyzePanel` runs a four-stage pipeline — (1) score calls for relevance via `gemini-2.5-flash-lite`, (2) surgical transcript extraction reducing full transcripts to dense evidence, (3) finding extraction via `gemini-3.8-flash`, (4) synthesis + follow-up Q&A. All via `/api/analyze/*` routes. Credentials: `GEMINI_API_KEY` server-side only.
 - **Transcript surgery**: `src/lib/transcript-surgery.ts` filters utterances to relevant sections, strips greetings/closings (first/last 60s, <8 words), enriches external utterances with context, flags long internal monologues for AI-assisted condensing.
 - **Tracker alignment**: Four-step algorithm ported from GongWizard v2 — exact containment → ±3s fallback → speaker preference → closest midpoint.
+
+## Gemini model pinning — read before changing any model id
+
+**This repo has been broken by a Gemini retirement TWICE.** 2026-03-04: "replace
+deprecated gemini-2.0 models with gemini-2.5-flash-lite". 2026-11-20: the smart
+tier was still on `gemini-2.5-pro`, which Google deprecated on 2026-11-02. The
+rules below exist so there is no third time.
+
+- **Every model id lives in `src/lib/gemini-generation-shape.ts`** — never a bare
+  literal at a call site. `ai-providers.ts` held three, which is three chances to
+  drift apart; one of them (`smartStream`) was dead code nobody would have
+  thought to update.
+- **A retired model does NOT fail loudly — it gets silently repointed.** Google
+  keeps ACCEPTING a retired name and SERVES something else, billed at the new
+  model's rates (`gemini-2.5-pro` → `gemini-3.8-flash`,
+  `gemini-2.5-flash` → `gemini-3.5-flash-lite`, both from 2026-12-01). And
+  `temperature`/`topP`/`topK` are *"deprecated and ignored"* on 3.x/4.x — **not
+  rejected**. So a stale pin keeps returning 200 while quietly losing sampling
+  control. Do not expect a 400 to tell you. `gemini-2.5-flash-lite` is NOT in
+  the deprecation notice; the cheap tier is fine where it is.
+- **Pass an explicit `thinkingConfig` at every call site.** `geminiTuning`
+  translates a thinking config; it cannot invent one. Omitting it means the
+  model's own default — MEDIUM on the 3.x flash tier — so thinking comes back ON,
+  thought tokens are billed as output AND consume the same `maxOutputTokens`
+  budget as the answer. Every smart-tier caller here `JSON.parse`s the result and
+  `batch-run` asks for 16384 tokens, so a thinking model can truncate mid-JSON →
+  `AI model returned invalid JSON` → **surfaced verbatim to the user** by
+  `analyze-panel.tsx`, aborting the whole run. There is no fallback provider
+  (`openai` is in package.json with zero imports).
+- **`thinkingLevel` values are not portable across models.** `minimal` is
+  rejected with a 400 on `gemini-3.8-flash` and the Gemini 4 family, and accepted
+  on 3.6 and below. `lowestThinkingLevelFor` encodes this; don't hardcode a level.
+- **Nothing in this repo's normal tooling can catch a bad model id.**
+  `npm run build` and `npm run lint` both pass regardless — the model is a
+  runtime string handed to the SDK. The only automated check is
+  **`node scripts/ci/gemini-model-shape.test.mjs`** (behaviour + source scan,
+  mutation-proven against four regressions). Run it after ANY change here. Real
+  verification needs a live call: `python3 .claude/skills/gongwizard-test/test_analyze.py`.
+- A model swap is a **code change + deploy** — there is no `GEMINI_MODEL` env var,
+  so there is no way to roll a bad choice back without another push.
 
 ## Tech Stack
 
@@ -48,7 +88,7 @@ Web app that helps Gong customers export call transcripts optimized for AI analy
 | Command Menu | cmdk | ^1.1.1 | Command palette primitive |
 | Date Picker | react-day-picker | ^9.14.0 | Calendar/date range picker |
 | Date Utilities | date-fns | ^4.1.0 | Date formatting in export filenames |
-| AI Provider | @google/genai | ^1.43.0 | `gemini-2.5-flash-lite` (scoring, truncation) and `gemini-2.5-pro` (analysis, synthesis, follow-up) |
+| AI Provider | @google/genai | ^1.43.0 | `gemini-2.5-flash-lite` (scoring, truncation) and `gemini-3.8-flash` (analysis, synthesis, follow-up) |
 | OpenAI SDK | openai | ^6.25.0 | In package.json; not used in current route handlers |
 | ZIP Export | client-zip | ^2.5.0 | Browser-side ZIP creation for bulk transcript exports |
 | Testing | @playwright/test | ^1.58.2 | End-to-end smoke tests |
@@ -84,10 +124,10 @@ Stateless — no database, credentials in sessionStorage only.
 
 - `src/app/api/analyze/score/route.ts` — Relevance scoring (`gemini-2.5-flash-lite`, scores 0–10 per call)
 - `src/app/api/analyze/process/route.ts` — Smart truncation of long internal rep monologues (`gemini-2.5-flash-lite`)
-- `src/app/api/analyze/run/route.ts` — Single-call finding extraction (`gemini-2.5-pro`; `maxDuration = 60`)
-- `src/app/api/analyze/batch-run/route.ts` — Multi-call finding extraction (`gemini-2.5-pro`; `maxDuration = 60`)
-- `src/app/api/analyze/synthesize/route.ts` — Cross-call synthesis (`gemini-2.5-pro`; `maxDuration = 60`)
-- `src/app/api/analyze/followup/route.ts` — Follow-up Q&A against cached evidence (`gemini-2.5-pro`; `maxDuration = 60`)
+- `src/app/api/analyze/run/route.ts` — Single-call finding extraction (`gemini-3.8-flash`; `maxDuration = 60`)
+- `src/app/api/analyze/batch-run/route.ts` — Multi-call finding extraction (`gemini-3.8-flash`; `maxDuration = 60`)
+- `src/app/api/analyze/synthesize/route.ts` — Cross-call synthesis (`gemini-3.8-flash`; `maxDuration = 60`)
+- `src/app/api/analyze/followup/route.ts` — Follow-up Q&A against cached evidence (`gemini-3.8-flash`; `maxDuration = 60`)
 
 ### Components & Hooks
 
@@ -99,7 +139,8 @@ Stateless — no database, credentials in sessionStorage only.
 ### Lib Modules
 
 - `src/lib/gong-api.ts` — Shared Gong API utilities: `GongApiError`, `makeGongFetch`, `handleGongError`, rate limit + batch constants, exponential backoff
-- `src/lib/ai-providers.ts` — Gemini abstraction: `cheapCompleteJSON` (`gemini-2.5-flash-lite`) and `smartCompleteJSON`/`smartStream` (`gemini-2.5-pro`)
+- `src/lib/ai-providers.ts` — Gemini abstraction: `cheapCompleteJSON` (`gemini-2.5-flash-lite`) and `smartCompleteJSON` (`gemini-3.8-flash`). Model ids + the per-generation request shape come from `gemini-generation-shape.ts`; this file holds no model literal. (`smartStream` was deleted 2026-11-20 — zero callers.)
+- `src/lib/gemini-generation-shape.ts` — the ONE home for model ids (`GEMINI_SMART_MODEL`, `GEMINI_CHEAP_MODEL`) and `geminiTuning`, which corrects a request config for its model's generation. See "Gemini model pinning" below.
 - `src/lib/transcript-formatter.ts` — All export rendering: `buildMarkdown`, `buildXML`, `buildJSONL`, `buildCSVSummary`, `buildUtteranceCSV`, `buildExportContent`
 - `src/lib/transcript-surgery.ts` — Surgical transcript extraction for AI analysis: `performSurgery`, `formatExcerptsForAnalysis`, `buildSmartTruncationPrompt`
 - `src/lib/tracker-alignment.ts` — Aligns tracker occurrences to utterances; `buildUtterances`, `alignTrackersToUtterances`
@@ -116,7 +157,7 @@ Stateless — no database, credentials in sessionStorage only.
 | Name | Purpose | Required |
 |---|---|---|
 | `SITE_PASSWORD` | Password checked on gate page to issue `gw-auth` session cookie | Required |
-| `GEMINI_API_KEY` | API key for Google Gemini (`gemini-2.5-flash-lite` and `gemini-2.5-pro`) | Required for AI analysis features |
+| `GEMINI_API_KEY` | API key for Google Gemini (`gemini-2.5-flash-lite` and `gemini-3.8-flash`) | Required for AI analysis features |
 
 Gong API credentials are user-supplied at runtime, passed via `X-Gong-Auth` header, and held only in browser `sessionStorage` under `gongwizard_session`. Never persisted server-side.
 

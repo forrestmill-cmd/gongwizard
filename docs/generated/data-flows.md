@@ -225,7 +225,7 @@ sequenceDiagram
     User->>Panel: Type question → Find Relevant Calls → handleScore()
 
     Panel->>ScoreAPI: POST /api/analyze/score<br/>{ question, calls[]: { id, title, brief, keyPoints, outline, trackers, topics, talkRatio } }
-    ScoreAPI->>Gemini: cheapCompleteJSON() → gemini-2.0-flash-lite<br/>Score 0-10 + relevant outline section names
+    ScoreAPI->>Gemini: cheapCompleteJSON() → gemini-2.5-flash-lite<br/>Score 0-10 + relevant outline section names
     Gemini-->>ScoreAPI: { scores[]: { callId, score, reason, relevant_sections[] } }
     ScoreAPI-->>Panel: Sorted scored calls; auto-select score >= 3
 
@@ -242,7 +242,7 @@ sequenceDiagram
 
         opt Has long internal monologues
             Panel->>ProcessAPI: POST /api/analyze/process<br/>{ question, monologues[]: { index, text } }
-            ProcessAPI->>Gemini: cheapCompleteJSON() → gemini-2.0-flash-lite<br/>buildSmartTruncationPrompt()
+            ProcessAPI->>Gemini: cheapCompleteJSON() → gemini-2.5-flash-lite<br/>buildSmartTruncationPrompt()
             Gemini-->>ProcessAPI: [{ index, kept: string }]
             ProcessAPI-->>Panel: { truncated[] } → patch surgery.excerpts[t.index].text
         end
@@ -251,12 +251,12 @@ sequenceDiagram
     end
 
     Panel->>BatchAPI: POST /api/analyze/batch-run<br/>{ question, calls[]: { callId, callData, brief, speakerDirectory, callMeta } }<br/>maxDuration = 60s
-    BatchAPI->>Gemini: smartCompleteJSON() → gemini-2.5-pro<br/>Extract verbatim external-speaker quotes per call
+    BatchAPI->>Gemini: smartCompleteJSON() → gemini-3.8-flash<br/>Extract verbatim external-speaker quotes per call
     Gemini-->>BatchAPI: { results: { [callId]: { findings[] } } }
     BatchAPI-->>Panel: BatchResult
 
     Panel->>SynthAPI: POST /api/analyze/synthesize<br/>{ question, allFindings[] }
-    SynthAPI->>Gemini: smartCompleteJSON() → gemini-2.5-pro<br/>2-4 sentence answer + representative verbatim quotes
+    SynthAPI->>Gemini: smartCompleteJSON() → gemini-3.8-flash<br/>2-4 sentence answer + representative verbatim quotes
     Gemini-->>SynthAPI: { answer: string, quotes[]: QuoteAttribution }
     SynthAPI-->>Panel: First QAEntry → setConversation([firstEntry])
     Panel->>Panel: setProcessedDataCache(allProcessedData joined)
@@ -266,7 +266,7 @@ sequenceDiagram
     opt Follow-up (up to MAX_QUESTIONS = 5 total)
         User->>Panel: Type follow-up → handleFollowUp()
         Panel->>FollowupAPI: POST /api/analyze/followup<br/>{ question, followUpQuestion, processedData (cached), previousFindings }
-        FollowupAPI->>Gemini: smartCompleteJSON() → gemini-2.5-pro
+        FollowupAPI->>Gemini: smartCompleteJSON() → gemini-3.8-flash
         Gemini-->>FollowupAPI: { answer: string, quotes[] }
         FollowupAPI-->>Panel: New QAEntry → append to conversation[]
     end
@@ -277,7 +277,7 @@ sequenceDiagram
 ### Stage 1 — Scoring (`handleScore`)
 
 1. `AnalyzePanel` (`src/components/analyze-panel.tsx`) POSTs `{ question, calls[] }` to `/api/analyze/score`. Each call entry includes `id`, `title`, `brief`, `keyPoints`, `outline`, `trackers`, `topics`, and `talkRatio` — metadata only, no transcripts.
-2. `POST /api/analyze/score` (`src/app/api/analyze/score/route.ts`) builds a prompt listing all calls and calls `cheapCompleteJSON()` from `src/lib/ai-providers.ts`, which uses `gemini-2.0-flash-lite` with `responseMimeType: 'application/json'`.
+2. `POST /api/analyze/score` (`src/app/api/analyze/score/route.ts`) builds a prompt listing all calls and calls `cheapCompleteJSON()` from `src/lib/ai-providers.ts`, which uses `gemini-2.5-flash-lite` with `responseMimeType: 'application/json'`.
 3. The model returns `{ scores[]: { callId, score, reason, relevant_sections[] } }`. Scores are clamped 0–10. A fallback returns score 5 for all calls if the batch fails.
 4. `AnalyzePanel` sorts scores descending and auto-selects calls with `score >= 3`. The user can manually adjust before proceeding.
 
@@ -286,23 +286,23 @@ sequenceDiagram
 1. `handleAnalyze()` fetches transcripts for selected calls via `POST /api/gong/transcripts` (same flow as the export pipeline — see Flow 4, steps 2–3).
 2. For each call, `AnalyzePanel` calls `buildUtterances(monologues, speakerClassifier)` and `alignTrackersToUtterances(utterances, trackerOccs)` from `src/lib/tracker-alignment.ts` to produce time-stamped, tracker-annotated utterance objects.
 3. `performSurgery(callId, utterances, outline, relevantSections, callDurationMs, speakerMap)` in `src/lib/transcript-surgery.ts` filters the utterance list to only segments inside the relevant outline chapter windows (identified by scoring) or with tracker hits. It strips filler (`isFiller()`), greetings/closings (`isGreetingOrClosing()` — first/last 60 s with fewer than 15 words), and utterances under 8 words. External utterances get context enrichment via `enrichContext()` (looks back 1–2 turns). Internal monologues over 60 words are flagged `needsSmartTruncation = true`.
-4. For each call with `needsSmartTruncation` excerpts, `AnalyzePanel` calls `POST /api/analyze/process` with the long monologue segments. `buildSmartTruncationPrompt()` asks `gemini-2.0-flash-lite` to keep only sentences that set up customer responses, contain pricing/product claims, or pose questions the customer answers. The result patches `surgery.excerpts[t.index].text` in place.
+4. For each call with `needsSmartTruncation` excerpts, `AnalyzePanel` calls `POST /api/analyze/process` with the long monologue segments. `buildSmartTruncationPrompt()` asks `gemini-2.5-flash-lite` to keep only sentences that set up customer responses, contain pricing/product claims, or pose questions the customer answers. The result patches `surgery.excerpts[t.index].text` in place.
 5. `formatExcerptsForAnalysis(excerpts, ..., externalOnly=true)` renders the surgical output as a dense text block grouped by outline section, annotated with Gong AI outline item descriptions, tracker labels, and resolved speaker names/titles. Internal rep utterances are suppressed; Gong AI outline items serve as proxy for rep context.
 
 ### Stage 3 — Batch finding extraction
 
 1. `AnalyzePanel` sends all call payloads together to `POST /api/analyze/batch-run` (`src/app/api/analyze/batch-run/route.ts`, `maxDuration = 60`). The payload is `{ question, calls[]: { callId, callData, brief, speakerDirectory, callMeta } }`.
-2. The route builds a unified prompt with an external-speakers header and per-call sections using the surgical `callData` blocks, then calls `smartCompleteJSON()` using `gemini-2.5-pro`.
+2. The route builds a unified prompt with an external-speakers header and per-call sections using the surgical `callData` blocks, then calls `smartCompleteJSON()` using `gemini-3.8-flash`.
 3. The model returns `{ results: { [callId]: { findings[] } } }` where each finding is `{ exact_quote, speaker_name, job_title, company, is_external, timestamp, context, significance, finding_type }`.
 
 ### Stage 4 — Synthesis
 
 1. If any call has `is_external` findings, `AnalyzePanel` POSTs `{ question, allFindings[] }` to `POST /api/analyze/synthesize` (`src/app/api/analyze/synthesize/route.ts`, `maxDuration = 60`).
-2. The route flattens external findings into a quoted evidence block and calls `smartCompleteJSON()` on `gemini-2.5-pro`. The model returns `{ answer: string, quotes[]: { quote, speaker_name, job_title, company, call_title, call_date } }`.
+2. The route flattens external findings into a quoted evidence block and calls `smartCompleteJSON()` on `gemini-3.8-flash`. The model returns `{ answer: string, quotes[]: { quote, speaker_name, job_title, company, call_title, call_date } }`.
 3. `AnalyzePanel` stores this as the first `QAEntry` in `conversation[]` and caches the raw processed transcript text in `processedDataCache` for follow-up use.
 
 ### Follow-up Q&A loop
 
 1. The user can ask up to `MAX_QUESTIONS = 5` total questions (initial + follow-ups). `handleFollowUp()` POSTs `{ question, followUpQuestion, processedData (cached), previousFindings }` to `POST /api/analyze/followup` (`src/app/api/analyze/followup/route.ts`, `maxDuration = 60`).
-2. This route answers using only the cached `processedData` evidence — no re-fetch of transcripts — making follow-up responses fast and consistent with the original analysis. It calls `smartCompleteJSON()` on `gemini-2.5-pro`.
+2. This route answers using only the cached `processedData` evidence — no re-fetch of transcripts — making follow-up responses fast and consistent with the original analysis. It calls `smartCompleteJSON()` on `gemini-3.8-flash`.
 3. Each follow-up appends a new `QAEntry` to `conversation[]`. The conversation is exportable as JSON or CSV via `handleExportJSON()` and `handleExportCSV()`.

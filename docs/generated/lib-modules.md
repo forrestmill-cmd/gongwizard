@@ -61,7 +61,7 @@ export const TRANSCRIPT_BATCH_SIZE: number // 50
 
 ### src/lib/ai-providers.ts
 
-Gemini AI abstraction layer. Exposes a cheap tier (`gemini-2.5-flash-lite`) for scoring and truncation, and a smart tier (`gemini-2.5-pro`) for finding extraction, synthesis, and follow-up Q&A. Both tiers have JSON and streaming variants. Lazily initializes a single shared `GoogleGenAI` client from `GEMINI_API_KEY`.
+Gemini AI abstraction layer. Exposes a cheap tier (`gemini-2.5-flash-lite`) for scoring and truncation, and a smart tier (`gemini-3.8-flash`) for finding extraction, synthesis, and follow-up Q&A. Both tiers have JSON and streaming variants. Lazily initializes a single shared `GoogleGenAI` client from `GEMINI_API_KEY`.
 
 **Key exports:**
 
@@ -535,7 +535,7 @@ flowchart TD
 
     subgraph external["External Services"]
         GONG["Gong REST API\nhttps://api.gong.io"]
-        GEMINI["Google Gemini\ngemini-2.5-flash-lite\ngemini-2.5-pro"]
+        GEMINI["Google Gemini\ngemini-2.5-flash-lite\ngemini-3.8-flash"]
     end
 
     subgraph npm["npm packages"]

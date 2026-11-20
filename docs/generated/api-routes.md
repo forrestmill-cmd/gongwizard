@@ -538,7 +538,7 @@ Stage 2 sub-step. Compresses long internal rep monologues flagged by `performSur
 
 **File:** `src/app/api/analyze/run/route.ts`
 
-**AI model:** `gemini-2.5-pro` via `smartCompleteJSON` from `src/lib/ai-providers.ts`.
+**AI model:** `gemini-3.8-flash` via `smartCompleteJSON` from `src/lib/ai-providers.ts`.
 
 **Vercel:** `export const maxDuration = 60`
 
@@ -601,7 +601,7 @@ Returns `{ "findings": [] }` when no relevant external speaker evidence is found
 
 **File:** `src/app/api/analyze/batch-run/route.ts`
 
-**AI model:** `gemini-2.5-pro` via `smartCompleteJSON` from `src/lib/ai-providers.ts`.
+**AI model:** `gemini-3.8-flash` via `smartCompleteJSON` from `src/lib/ai-providers.ts`.
 
 **Vercel:** `export const maxDuration = 60`
 
@@ -685,7 +685,7 @@ interface BatchResult {
 
 **File:** `src/app/api/analyze/synthesize/route.ts`
 
-**AI model:** `gemini-2.5-pro` via `smartCompleteJSON` from `src/lib/ai-providers.ts`.
+**AI model:** `gemini-3.8-flash` via `smartCompleteJSON` from `src/lib/ai-providers.ts`.
 
 **Vercel:** `export const maxDuration = 60`
 
@@ -753,7 +753,7 @@ Stage 4. Takes all per-call findings from `run`/`batch-run` and produces a direc
 
 **File:** `src/app/api/analyze/followup/route.ts`
 
-**AI model:** `gemini-2.5-pro` via `smartCompleteJSON` from `src/lib/ai-providers.ts`.
+**AI model:** `gemini-3.8-flash` via `smartCompleteJSON` from `src/lib/ai-providers.ts`.
 
 **Vercel:** `export const maxDuration = 60`
 
@@ -845,8 +845,8 @@ The `GoogleGenAI` client is lazy-initialized from `process.env.GEMINI_API_KEY`.
 | Function            | Model                   | JSON mode                                    | Default maxTokens | Used by routes                               |
 | ------------------- | ----------------------- | -------------------------------------------- | ----------------- | -------------------------------------------- |
 | `cheapCompleteJSON` | `gemini-2.5-flash-lite` | Yes (`responseMimeType: 'application/json'`) | 1024              | `score`, `process`                           |
-| `smartCompleteJSON` | `gemini-2.5-pro`        | Yes                                          | 8192              | `run`, `batch-run`, `synthesize`, `followup` |
-| `smartStream`       | `gemini-2.5-pro`        | No                                           | 8192              | Defined; not used by any current route       |
+| `smartCompleteJSON` | `gemini-3.8-flash`        | Yes                                          | 8192              | `run`, `batch-run`, `synthesize`, `followup` |
+| `smartStream`       | `gemini-3.8-flash`        | No                                           | 8192              | Defined; not used by any current route       |
 
 Each route passes `temperature` and `maxTokens` overrides at call time. `smartCompleteJSON` accepts an optional `systemPrompt` string passed as `systemInstruction` to the Gemini API.
 

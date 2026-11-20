@@ -4,7 +4,7 @@
 
 GongWizard is a stateless Next.js 15 web application that acts as a proxy layer between the user's browser and the Gong API. Users supply their own Gong API credentials at runtime; those credentials are Base64-encoded in the browser, stored in `sessionStorage` under the key `gongwizard_session`, and forwarded on every proxied request via a custom `X-Gong-Auth` HTTP header. The server never stores credentials — each request is fully self-contained. A site-level password gate (`SITE_PASSWORD` env var, enforced in `src/middleware.ts` via an httpOnly `gw-auth` cookie) controls who can access the application at all, providing a lightweight layer of access control without requiring user accounts.
 
-The application has two primary capabilities. The first is transcript export: users browse, filter, and select calls from a paginated/streamed call list, then export transcripts in five formats (Markdown, XML, JSONL, summary CSV, utterance-level CSV) optimized for pasting into LLMs like ChatGPT or Claude. All export rendering logic runs entirely in the browser through `src/hooks/useCallExport.ts` and `src/lib/transcript-formatter.ts`. The second capability is an AI-powered research pipeline accessible through the `AnalyzePanel` component: users pose a research question against selected calls, triggering a four-stage pipeline — relevance scoring via `gemini-2.5-flash-lite`, surgical transcript extraction via `src/lib/transcript-surgery.ts`, finding extraction via `gemini-2.5-pro`, and cross-call synthesis followed by interactive follow-up Q&A. The AI pipeline runs entirely server-side through Next.js Route Handlers that hold the `GEMINI_API_KEY`.
+The application has two primary capabilities. The first is transcript export: users browse, filter, and select calls from a paginated/streamed call list, then export transcripts in five formats (Markdown, XML, JSONL, summary CSV, utterance-level CSV) optimized for pasting into LLMs like ChatGPT or Claude. All export rendering logic runs entirely in the browser through `src/hooks/useCallExport.ts` and `src/lib/transcript-formatter.ts`. The second capability is an AI-powered research pipeline accessible through the `AnalyzePanel` component: users pose a research question against selected calls, triggering a four-stage pipeline — relevance scoring via `gemini-2.5-flash-lite`, surgical transcript extraction via `src/lib/transcript-surgery.ts`, finding extraction via `gemini-3.8-flash`, and cross-call synthesis followed by interactive follow-up Q&A. The AI pipeline runs entirely server-side through Next.js Route Handlers that hold the `GEMINI_API_KEY`.
 
 All Gong API calls are proxied through four Route Handlers (`connect`, `calls`, `transcripts`, `search`) that enforce a 350 ms inter-request delay, exponential backoff with up to 5 retries, and batch size limits (`EXTENSIVE_BATCH_SIZE = 10`, `TRANSCRIPT_BATCH_SIZE = 50`). Speaker classification as internal or external is derived at connect time by extracting email domains from `/v2/users` results and comparing against party email addresses — there is no external configuration file for this.
 
@@ -47,9 +47,9 @@ flowchart TD
     subgraph AIRoutes["AI Analysis API Routes"]
         ScoreRoute["POST /api/analyze/score\ngemini-2.5-flash-lite"]
         ProcessRoute["POST /api/analyze/process\ngemini-2.5-flash-lite"]
-        BatchRunRoute["POST /api/analyze/batch-run\ngemini-2.5-pro"]
-        SynthesizeRoute["POST /api/analyze/synthesize\ngemini-2.5-pro"]
-        FollowupRoute["POST /api/analyze/followup\ngemini-2.5-pro"]
+        BatchRunRoute["POST /api/analyze/batch-run\ngemini-3.8-flash"]
+        SynthesizeRoute["POST /api/analyze/synthesize\ngemini-3.8-flash"]
+        FollowupRoute["POST /api/analyze/followup\ngemini-3.8-flash"]
         AIProviders["ai-providers.ts\nchapCompleteJSON, smartCompleteJSON,\nsmartStream"]
     end
 
@@ -64,7 +64,7 @@ flowchart TD
 
     subgraph GeminiAPI["Google Gemini API (External)"]
         FlashLite["gemini-2.5-flash-lite"]
-        Pro["gemini-2.5-pro"]
+        Pro["gemini-3.8-flash"]
     end
 
     MW -->|redirect /gate if no cookie| GatePage
@@ -241,7 +241,7 @@ Depends on: `src/lib/ai-providers.ts`, `src/lib/transcript-surgery.ts`.
 
 ### `src/app/api/analyze/run/route.ts`
 
-POST handler (`maxDuration = 60`). Single-call finding extraction. Accepts `{ question, callData, speakerDirectory, callMeta }`. Calls `smartCompleteJSON` (`gemini-2.5-pro`). Returns `{ findings: [{ exact_quote, speaker_name, job_title, company, is_external, timestamp, context, significance, finding_type }] }`.
+POST handler (`maxDuration = 60`). Single-call finding extraction. Accepts `{ question, callData, speakerDirectory, callMeta }`. Calls `smartCompleteJSON` (`gemini-3.8-flash`). Returns `{ findings: [{ exact_quote, speaker_name, job_title, company, is_external, timestamp, context, significance, finding_type }] }`.
 
 Exports: `POST`
 
@@ -286,8 +286,8 @@ Gemini API abstraction. Lazy-initializes a single `GoogleGenAI` instance from `p
 Exports:
 
 - `cheapCompleteJSON<T>(prompt, options?)` — uses `gemini-2.5-flash-lite` with `responseMimeType: 'application/json'`
-- `smartCompleteJSON<T>(prompt, options?)` — uses `gemini-2.5-pro` with JSON mode and optional `systemInstruction`
-- `smartStream(prompt, options?)` — async generator streaming from `gemini-2.5-pro`
+- `smartCompleteJSON<T>(prompt, options?)` — uses `gemini-3.8-flash` with JSON mode and optional `systemInstruction`
+- `smartStream(prompt, options?)` — async generator streaming from `gemini-3.8-flash`
 
 Depends on: `@google/genai`. Depended on by: all six `/api/analyze/*` routes.
 
@@ -478,7 +478,7 @@ Key exports: `GongCall`, `GongParty`, `GongTracker`, `TrackerOccurrence`, `Outli
 | Command Menu | cmdk | ^1.1.1 | Command palette primitive used in `MultiSelect` |
 | Date Picker | react-day-picker | ^9.14.0 | Calendar/date range picker on Connect page |
 | Date Utilities | date-fns | ^4.1.0 | Date formatting in export filenames |
-| AI Provider | @google/genai | ^1.43.0 | `gemini-2.5-flash-lite` (scoring, truncation) and `gemini-2.5-pro` (analysis, synthesis, follow-up) |
+| AI Provider | @google/genai | ^1.43.0 | `gemini-2.5-flash-lite` (scoring, truncation) and `gemini-3.8-flash` (analysis, synthesis, follow-up) |
 | OpenAI SDK | openai | ^6.25.0 | Installed; not used in any current route handler |
 | ZIP Export | client-zip | ^2.5.0 | Browser-side ZIP creation for bulk transcript exports |
 | Testing | @playwright/test | ^1.58.2 | End-to-end smoke tests |
