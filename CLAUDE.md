@@ -61,6 +61,29 @@ rules below exist so there is no third time.
 - **`thinkingLevel` values are not portable across models.** `minimal` is
   rejected with a 400 on `gemini-3.8-flash` and the Gemini 4 family, and accepted
   on 3.6 and below. `lowestThinkingLevelFor` encodes this; don't hardcode a level.
+
+**Measured receipts (live API, `gemini-3.8-flash`, 2026-11-20).** Not from the
+docs — these were run against the real endpoint with this repo's own key, and
+they are why the two rules above are written the way they are:
+
+| Request | Result |
+|---|---|
+| `thinkingLevel: MINIMAL` | **400** `"Thinking level MINIMAL is not supported for this model."` |
+| `thinkingLevel: LOW` | 200, `finishReason=STOP`, `thoughtsTokenCount=0` |
+| JSON prompt, `maxOutputTokens: 64`, **no** `thinkingConfig` | `finishReason=MAX_TOKENS`, `thoughtsTokenCount=58`, answer truncated to `{"findings` |
+| JSON prompt, `maxOutputTokens: 64`, `thinkingLevel: LOW` | `finishReason=STOP`, `thoughtsTokenCount=0`, answer `{"findings": ["a", "b"]}` |
+
+The third row is the whole argument for the explicit `thinkingConfig`: default
+thinking consumed 58 of 64 output tokens and returned **invalid, truncated
+JSON** — which `smartCompleteJSON` turns into `AI model returned invalid JSON`
+and `analyze-panel.tsx` shows to the user verbatim. `batch-run` runs the same
+ratio at 16384 tokens against far longer transcripts.
+
+A note on probing: firing these checks back-to-back got **HTTP 404 with
+`"no longer available to new users"`** on models that demonstrably work,
+including ones that had just answered. That is throttling wearing a misleading
+error code, not a retirement — space probes out by ~20s before concluding a
+model is gone.
 - **Nothing in this repo's normal tooling can catch a bad model id.**
   `npm run build` and `npm run lint` both pass regardless — the model is a
   runtime string handed to the SDK. The only automated check is
